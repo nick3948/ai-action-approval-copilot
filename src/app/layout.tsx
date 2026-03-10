@@ -17,6 +17,8 @@ export const metadata: Metadata = {
   description: "Secure AI assistant that asks permission before executing high-risk actions using Auth0 Token Vault.",
 };
 
+import { Auth0Provider } from '@auth0/nextjs-auth0';
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -27,7 +29,9 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        {children}
+        <Auth0Provider>
+          {children}
+        </Auth0Provider>
       </body>
     </html>
   );

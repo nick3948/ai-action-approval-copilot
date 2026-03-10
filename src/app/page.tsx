@@ -27,9 +27,9 @@ export default function Home() {
           </div>
           <div>
             <p className="font-semibold mb-1 text-sm">Copilot</p>
-            <p className="text-sm">
-              Hello! I'm your secure AI assistant. I can help you interact with GitHub and Slack.
-              Don't worry, I won't execute any high-risk actions without your explicit approval.
+            <p className="text-gray-600 mb-6 text-center">
+              I&apos;m your AI Action Approval Copilot. I help you automate tasks securely.
+              Before executing any high-risk actions on your behalf, I&apos;ll explain my plan and ask for your approval.
               What would you like to do today?
             </p>
           </div>
