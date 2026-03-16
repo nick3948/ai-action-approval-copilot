@@ -3,9 +3,7 @@ import { auth0 } from "@/lib/auth0";
 
 export default async function Home() {
   const session = await auth0.getSession();
-  console.log("name: ", session?.user.nickname);
-
-
+  
   return (
     <div className="flex flex-col h-screen bg-background">
       <header className="flex h-16 items-center px-4 border-b border-border bg-card">
