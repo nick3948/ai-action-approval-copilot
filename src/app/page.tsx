@@ -1,6 +1,11 @@
 import { Send } from "lucide-react";
+import { auth0 } from "@/lib/auth0";
 
-export default function Home() {
+export default async function Home() {
+  const session = await auth0.getSession();
+  console.log("name: ", session?.user.nickname);
+
+
   return (
     <div className="flex flex-col h-screen bg-background">
       <header className="flex h-16 items-center px-4 border-b border-border bg-card">
@@ -11,12 +16,29 @@ export default function Home() {
           <h1 className="text-xl font-bold">Action Approval Copilot</h1>
         </div>
         <div className="ml-auto">
-          <a
-            href="/api/auth/login"
-            className="px-4 py-2 text-sm font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-          >
-            Login
-          </a>
+          {session ? (
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                {session.user.picture && (
+                  <img src={session.user.picture} alt={session.user.nickname} className="w-8 h-8 rounded-full" />
+                )}
+                <span className="text-sm font-medium">{session.user.nickname}</span>
+              </div>
+              <a
+                href="/auth/logout"
+                className="px-4 py-2 text-sm font-medium rounded-md border border-input bg-background hover:bg-accent hover:text-accent-foreground transition-colors"
+              >
+                Logout
+              </a>
+            </div>
+          ) : (
+            <a
+              href="/auth/login"
+              className="px-4 py-2 text-sm font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+            >
+              Login
+            </a>
+          )}
         </div>
       </header>
 
