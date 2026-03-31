@@ -1,16 +1,83 @@
 import { StateGraph, START, END, MemorySaver } from "@langchain/langgraph";
 import { AgentState, AgentStateType } from "./state";
+import { ChatOpenAI } from "@langchain/openai";
+import { z } from "zod";
+import { SystemMessage, AIMessage } from "@langchain/core/messages";
+
+const llm = new ChatOpenAI({
+  modelName: "gpt-4o",
+  temperature: 0,
+});
+
+const tools = [
+  {
+    name: "send_slack_message",
+    description: "Send a direct message or post to a Slack channel. Use this when the user asks to message someone or post on Slack.",
+    schema: z.object({
+      channel: z.string().describe("The slack channel or user ID"),
+      message: z.string().describe("The message to send")
+    })
+  },
+  {
+    name: "create_github_issue",
+    description: "Create a new issue in a GitHub repository. Use this when the user asks to create an issue, bug, or ticket on GitHub.",
+    schema: z.object({
+      repo: z.string().describe("The repository name (e.g. owner/repo)"),
+      title: z.string().describe("The title of the issue"),
+      body: z.string().describe("The body/description of the issue")
+    })
+  },
+  {
+    name: "delete_github_repo",
+    description: "Delete an entire GitHub repository. This is a critical action.",
+    schema: z.object({
+      repo: z.string().describe("The repository name to delete (e.g. owner/repo)"),
+    })
+  }
+];
+
+const llmWithTools = llm.bindTools(tools);
+
+const SYSTEM_PROMPT = `You are the Action Approval Copilot.
+You can converse with the user and help them with tasks.
+If they ask you to perform an action (like sending a Slack message, creating a GitHub issue, or deleting a repo), you MUST use the provided tools.
+Do NOT pretend to do the action. Always output a tool call.
+If the user is just chatting, respond normally.
+Your actions are safe because they will be paused for human approval before execution.`;
 
 // 1. Define the Nodes (The Functions)
-// Each node is simply a TypeScript function that receives the current `state`
+// Each node is simply a TypeScript function that receives the current \`state\`
 // and returns an object showing what part of the state it wants to update.
 
 async function agentNode(state: AgentStateType) {
   console.log("[Node: agent] AI is thinking and deciding which tool to use...");
 
-  // OpenAI logic will be written here later.
+  const messages = [
+    new SystemMessage(SYSTEM_PROMPT),
+    ...state.messages
+  ];
+
+  const response = await llmWithTools.invoke(messages);
+
+  // Check if the AI decided to call a tool
+  const toolCalls = (response as AIMessage).tool_calls || [];
+
+  if (toolCalls.length > 0) {
+    // We only handle one pending action at a time for simplicity in this demo.
+    const firstAction = toolCalls[0];
+    console.log("[Node: agent] Tool call chosen:", firstAction.name);
+
+    return {
+      messages: [response],
+      pending_action: firstAction
+    };
+  }
+
+  // If no tool call, just return the AI's chat response
+  console.log("[Node: agent] AI responded with text.");
   return {
-    // pending_action: { name: "send_slack_message", args: { message: "Hello!" } } 
+    messages: [response],
+    pending_action: null
   };
 }
 
