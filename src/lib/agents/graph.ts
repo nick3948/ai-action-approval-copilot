@@ -2,10 +2,10 @@ import { StateGraph, START, END, MemorySaver } from "@langchain/langgraph";
 import { AgentState, AgentStateType } from "./state";
 import { ChatOpenAI } from "@langchain/openai";
 import { z } from "zod";
-import { SystemMessage, AIMessage } from "@langchain/core/messages";
+import { SystemMessage, AIMessage, ToolMessage } from "@langchain/core/messages";
 
 const llm = new ChatOpenAI({
-  modelName: "gpt-4o",
+  modelName: "gpt-4o-mini",
   temperature: 0,
 });
 
@@ -84,28 +84,59 @@ async function agentNode(state: AgentStateType) {
 async function riskClassifierNode(state: AgentStateType) {
   console.log("[Node: risk_classifier] Checking if the planned action is dangerous...");
 
-  // Here we check the pending_action. Is it safe or dangerous?
-  return {
-    // risk_level: "high" as const,
-    // requested_scopes: ["chat:write"] 
-  };
+  const action = state.pending_action;
+  if (!action || !action.name) return {};
+
+  switch (action.name) {
+    case 'delete_github_repo':
+      return { risk_level: "critical", requested_scopes: ["repo:delete"] };
+    case 'create_github_issue':
+      return { risk_level: "high", requested_scopes: ["repo:write", "repo:read"] };
+    case 'send_slack_message':
+      return { risk_level: "low", requested_scopes: ["chat:write"] };
+    default:
+      return { risk_level: "low", requested_scopes: [] };
+  }
 }
 
 async function actionExecutionNode(state: AgentStateType) {
+  const action = state.pending_action;
+
+  if (state.approval_status === "rejected") {
+    console.log("[Node: action_execution] Human REJECTED the action. Skipping execution.");
+    return {
+      messages: [
+        new ToolMessage({
+          tool_call_id: action.id,
+          name: action.name,
+          content: "The user REJECTED this action. Do not attempt again. Inform the user."
+        })
+      ],
+      approval_status: null,
+      risk_level: null,
+      pending_action: null
+    };
+  }
+
   console.log("[Node: action_execution] Fetching Auth0 token and running the tool...");
 
-  // 1. Fetch token from Auth0 Token Vault
-  // 2. Run the tool (e.g., call Slack API)
+  // Phase 5: Fetch token from Auth0 Token Vault
+  // Phase 5: Run the tool (e.g., call Slack API)
 
-  // After it runs successfully, we clear the approval and risk states so the agent can continue.
+  console.log("[Node: action_execution] Tool executed successfully.");
   return {
+    messages: [
+      new ToolMessage({
+        tool_call_id: action.id,
+        name: action.name,
+        content: "Tool executed successfully."
+      })
+    ],
     approval_status: null,
     risk_level: null,
     pending_action: null
   };
 }
-
-// 2. Define the Routing Logic (Conditional Edges)
 
 function routeAfterClassification(state: AgentStateType) {
   // If the agent didn't want to run any tools, we are finished!
