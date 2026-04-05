@@ -1,12 +1,19 @@
-import { Send } from "lucide-react";
 import { auth0 } from "@/lib/auth0";
 import { ChatInterface } from "@/components/ChatInterface";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Sidebar } from "@/components/Sidebar";
+import { getConnectedServices } from "@/lib/auth0-management";
 import { Suspense } from "react";
 
 export default async function Home() {
   const session = await auth0.getSession();
+
+  // Count connected integrations to show badge
+  let connectedCount = 0;
+  if (session) {
+    const connected = await getConnectedServices(session.user.sub).catch(() => ({}));
+    connectedCount = Object.values(connected).filter(Boolean).length;
+  }
 
   return (
     <div className="flex flex-col h-screen bg-slate-50 dark:bg-[#0B0C10] text-slate-900 dark:text-slate-100 font-sans selection:bg-indigo-500/30">
@@ -20,7 +27,7 @@ export default async function Home() {
           </h1>
         </div>
 
-        <div className="flex items-center gap-2 sm:gap-4">
+        <div className="flex items-center gap-2 sm:gap-3">
           <ThemeToggle />
           {session ? (
             <>
@@ -30,6 +37,22 @@ export default async function Home() {
                   <span className="text-sm font-medium text-slate-700 dark:text-slate-300 hidden sm:block">{session.user.nickname}</span>
                 </div>
               )}
+
+              <a
+                href="/integrations"
+                className="relative text-sm font-medium bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-1.5 rounded-full transition-colors shadow-sm flex items-center gap-1.5"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+                  <path d="M13 4.5a2.5 2.5 0 1 1 .702 1.737L6.97 9.604a2.518 2.518 0 0 1 0 .792l6.733 3.367a2.5 2.5 0 1 1-.671 1.341l-6.733-3.367a2.5 2.5 0 1 1 0-3.474l6.733-3.366A2.52 2.52 0 0 1 13 4.5Z" />
+                </svg>
+                Integrations
+                {connectedCount > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-emerald-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center shadow-sm">
+                    {connectedCount}
+                  </span>
+                )}
+              </a>
+
               <a
                 href="/auth/logout"
                 className="text-sm font-medium bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 px-4 py-1.5 rounded-full transition-colors shadow-sm text-slate-700 dark:text-slate-300"
@@ -47,6 +70,7 @@ export default async function Home() {
           )}
         </div>
       </header>
+
 
       {session ? (
         <div className="flex-1 flex overflow-hidden">

@@ -143,3 +143,7 @@ vite.config.ts.timestamp-*
 .AppleDouble
 .LSOverride
 
+# Internal
+Hackathon_Details.md
+Feedback.md
+ImplementationPlan.md
