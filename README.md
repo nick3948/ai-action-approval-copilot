@@ -1,60 +1,32 @@
 # AI Action Approval Copilot 🤖
 
-**Secure AI agents with human-in-the-loop approval, powered by Auth0 Token Vault.** 
-
----
+**Secure AI agents with human-in-the-loop approval and extensible multi-service integrations.**
 
 ## Overview
 
-AI Action Approval Copilot acts as a secure "middleman" between you and your AI agent. Rather than giving an AI unrestricted access to your API keys, this app pauses execution on any high-risk action (like posting to Slack or deleting a repo). 
+AI Action Approval Copilot acts as a secure "middleman" between you and your AI agent. Rather than giving an AI unrestricted access to your API keys, this app securely holds your integrated service tokens and pauses any execution requested by the AI. It presents an **Agentic Pre-Flight Checklist** for your approval. If you say yes, it executes the action using tokens fetched securely on demand.
 
-It presents an **Agentic Pre-Flight Checklist** for your approval. If you say yes, it securely fetches a temporary, just-in-time token from the Auth0 Token Vault to complete the job.
+## 🚀 Major Features Implemented
 
-> **Deep Dive Blog Post:** 
-> I am writing a comprehensive blog post explaining the exact architecture, Risk-Based Authentication strategy, and how I built this using the new Auth0 Token Vault. 
-> **[Read the Full Story on Devpost (Link Coming Soon) ➔](#)**
-
----
+* **Human-in-the-Loop Action Approval:** A LangGraph orchestration system that intelligently decides when to use tools, classifies action risk (Low, Medium, High, Critical), and immediately pauses the graph to get your explicit UI-based approval before executing anything.
+* **Multi-Service Account Linking (Auth0 Management API):** Users login via a primary method (like Email/Password) and can independently connect and link third-party services (like GitHub) under the single Auth0 identity. Tokens are stored securely as IDP access tokens.
+* **12 Fully Supported GitHub Actions:**
+  * **Read-only (Low Risk):** List repositories, get specific repo details, list open/closed issues, list Pull Requests, list branches. 
+  * **Write (Medium to High Risk):** Create issues, close issues, create pull requests, create branches, merge pull requests, create releases.
+  * **Destructive (Critical Risk):** Delete repositories.
+* **Smart UI & Integrations Hub:** A beautiful dark-mode supported Chat Interface with independent conversation histories (saved atomically in caching memory) and an Integrations page clearly indicating which third-party services are currently communicating with your account.
+* **Extensible Architecture:** Designed with future growth in mind. Adding Slack, Jira, or Notion integration in the future only requires 3 steps using the already-built generic `getServiceToken()` methodology.
 
 ## 🛠️ Core Tech Stack
+
 * **Frontend & API:** Next.js (App Router)
-* **Authentication:** Auth0 for AI Agents Token Vault + `@auth0/nextjs-auth0` (v4)
-* **AI Orchestration:** LangGraph 
-* **AI Model:** OpenAI
+* **Authentication:** Auth0 (Web Login + Management API + Multi-identity linking)
+* **AI Orchestration:** LangGraph
+* **AI Model:** OpenAI (`gpt-4o-mini`)
 * **Styling:** TailwindCSS
 
 ---
 
-## 🚀 Quick Local Setup
-
-### Prerequisites
-* Node.js v20+
-* A free [Auth0 Account](https://auth0.com/)
-
-### Installation Steps
-
-1. **Clone the repo:**
-   ```bash
-   git clone https://github.com/nick3948/ai-action-approval-copilot.git
-   cd ai-action-approval-copilot
-   npm install
-   ```
-
-2. **Configure Auth0:** 
-   Create a "Regular Web Application" inside your [Auth0 Dashboard](https://manage.auth0.com/). Add `http://localhost:3000/auth/callback` to Allowed Callback URLs, and `http://localhost:3000` to Allowed Logout URLs.
-
-3. **Set Environment Variables:**
-   Create a `.env.local` file in the root directory and add your credentials:
-   ```env
-   AUTH0_SECRET='(generate using: openssl rand -hex 32)'
-   APP_BASE_URL='http://localhost:3000'
-   AUTH0_DOMAIN='your-tenant.us.auth0.com'
-   AUTH0_CLIENT_ID='your_client_id_here'
-   AUTH0_CLIENT_SECRET='your_client_secret_here'
-   ```
-
-4. **Run the App:**
-   ```bash
-   npm run dev
-   ```
-   Open `http://localhost:3000` to log in and test the copilot!
+> **Deep Dive Blog Post:** 
+> I am writing a comprehensive blog post explaining the exact architecture, Risk-Based Authentication strategy, and how I built this securely. 
+> **[Read the Full Story on Devpost (Link Coming Soon) ➔](#)**

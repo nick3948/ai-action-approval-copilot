@@ -14,12 +14,20 @@ export async function POST(req: Request) {
     const body = await req.json();
     const { messages, actionResponse, chatId = "default" } = body;
 
-    // 2. We use the Auth0 User ID securely combined with a unique chat ID as the Graph's "thread_id".
-    // This allows LangGraph's MemorySaver Checkpointer to perfectly recall 
-    // the user's specific conversation history for that specific tab!
-    const config = { configurable: { thread_id: `${session.user.sub}-${chatId}` } };
+    // 2. Grab the Auth0 refresh token from the session.
+    // This will be used by Auth0 AI SDK's Token Vault to exchange for a GitHub access token.
+    const refreshToken = (session.tokenSet as any)?.refreshToken as string | undefined;
 
-    // --- 3. THE RESUME FLOW (Human clicked Approve or Reject) ---
+    // 3. Thread ID uniquely identifies this user + chat session for LangGraph's checkpointer.
+    const config = {
+      configurable: {
+        thread_id: `${session.user.sub}-${chatId}`,
+        auth0RefreshToken: refreshToken,
+        auth0UserId: session.user.sub as string,
+      }
+    };
+
+    // --- 4. THE RESUME FLOW (Human clicked Approve or Reject) ---
     if (actionResponse) {
       console.log(`[API] Resuming graph for user ${session.user.sub}. Action: ${actionResponse}`);
 
@@ -32,14 +40,13 @@ export async function POST(req: Request) {
       return NextResponse.json({ state: finalState });
     }
 
-    // --- 4. THE STANDARD CHAT FLOW ---
+    // --- 5. THE STANDARD CHAT FLOW ---
     if (messages && messages.length > 0) {
       const latestText = messages[messages.length - 1].content;
       const humanMessage = new HumanMessage(latestText);
 
       console.log(`[API] Invoking agent for user ${session.user.sub} with: "${latestText}"`);
 
-      // Kick off the AI graph. It will either run to END or hit our `interruptBefore` breakpoint.
       const finalState = await agentGraph.invoke({ messages: [humanMessage] }, config);
 
       return NextResponse.json({ state: finalState });
@@ -52,6 +59,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
   }
 }
+
 
 export async function GET(req: Request) {
   try {

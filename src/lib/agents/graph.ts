@@ -1,185 +1,162 @@
 import { StateGraph, START, END, MemorySaver } from "@langchain/langgraph";
 import { AgentState, AgentStateType } from "./state";
+import { TOOLS, TOOLS_MAP } from "./tools";
+import { getGitHubToken } from "@/lib/auth0-management";
+import * as gh from "@/lib/github-api";
 import { ChatOpenAI } from "@langchain/openai";
-import { z } from "zod";
 import { SystemMessage, AIMessage, ToolMessage } from "@langchain/core/messages";
 
-const llm = new ChatOpenAI({
-  modelName: "gpt-4o-mini",
-  temperature: 0,
-});
+// ─── LLM Setup ────────────────────────────────────────────────────────────────
 
-const tools = [
-  {
-    name: "send_slack_message",
-    description: "Send a direct message or post to a Slack channel. Use this when the user asks to message someone or post on Slack.",
-    schema: z.object({
-      channel: z.string().describe("The slack channel or user ID"),
-      message: z.string().describe("The message to send")
-    })
-  },
-  {
-    name: "create_github_issue",
-    description: "Create a new issue in a GitHub repository. Use this when the user asks to create an issue, bug, or ticket on GitHub.",
-    schema: z.object({
-      repo: z.string().describe("The repository name (e.g. owner/repo)"),
-      title: z.string().describe("The title of the issue"),
-      body: z.string().describe("The body/description of the issue")
-    })
-  },
-  {
-    name: "delete_github_repo",
-    description: "Delete an entire GitHub repository. This is a critical action.",
-    schema: z.object({
-      repo: z.string().describe("The repository name to delete (e.g. owner/repo)"),
-    })
-  }
-];
+const llm = new ChatOpenAI({ modelName: "gpt-4o-mini", temperature: 0 });
+const llmWithTools = llm.bindTools(TOOLS);
 
-const llmWithTools = llm.bindTools(tools);
+const SYSTEM_PROMPT = `You are the Action Approval Copilot — a secure AI assistant that performs GitHub and Slack actions on behalf of the user.
 
-const SYSTEM_PROMPT = `You are the Action Approval Copilot.
-You can converse with the user and help them with tasks.
-If they ask you to perform an action (like sending a Slack message, creating a GitHub issue, or deleting a repo), you MUST use the provided tools.
-Do NOT pretend to do the action. Always output a tool call.
-If the user is just chatting, respond normally.
-Your actions are safe because they will be paused for human approval before execution.`;
+Available tools (always use them, never say you can't):
+${TOOLS.map((t) => `- ${t.name}: ${t.description.split(".")[0]}`).join("\n")}
 
-// 1. Define the Nodes (The Functions)
-// Each node is simply a TypeScript function that receives the current \`state\`
-// and returns an object showing what part of the state it wants to update.
+Rules:
+1. ALWAYS use a tool when the user requests an action. Never describe what you would do — just do it.
+2. For owner/repo parameters, ALWAYS split them into separate fields (owner: "nick3948", repo: "my-app").
+3. If the user does not specify owner, assume their username based on context.
+4. You can chain multiple tool calls in a conversation.
+5. All actions are safe because a human reviews and approves each one before execution.`;
+
+// ─── Graph Nodes ──────────────────────────────────────────────────────────────
 
 async function agentNode(state: AgentStateType) {
-  console.log("[Node: agent] AI is thinking and deciding which tool to use...");
-
-  const messages = [
-    new SystemMessage(SYSTEM_PROMPT),
-    ...state.messages
-  ];
-
-  const response = await llmWithTools.invoke(messages);
-
-  // Check if the AI decided to call a tool
+  console.log("[agent] Thinking...");
+  const response = await llmWithTools.invoke([new SystemMessage(SYSTEM_PROMPT), ...state.messages]);
   const toolCalls = (response as AIMessage).tool_calls || [];
 
   if (toolCalls.length > 0) {
-    // We only handle one pending action at a time for simplicity in this demo.
-    const firstAction = toolCalls[0];
-    console.log("[Node: agent] Tool call chosen:", firstAction.name);
-
-    return {
-      messages: [response],
-      pending_action: firstAction
-    };
+    console.log("[agent] Tool chosen:", toolCalls[0].name);
+    return { messages: [response], pending_action: toolCalls[0] };
   }
 
-  // If no tool call, just return the AI's chat response
-  console.log("[Node: agent] AI responded with text.");
-  return {
-    messages: [response],
-    pending_action: null
-  };
+  console.log("[agent] Text response.");
+  return { messages: [response], pending_action: null };
 }
 
 async function riskClassifierNode(state: AgentStateType) {
-  console.log("[Node: risk_classifier] Checking if the planned action is dangerous...");
-
   const action = state.pending_action;
-  if (!action || !action.name) return {};
+  if (!action?.name) return {};
 
-  switch (action.name) {
-    case 'delete_github_repo':
-      return { risk_level: "critical", requested_scopes: ["repo:delete"] };
-    case 'create_github_issue':
-      return { risk_level: "high", requested_scopes: ["repo:write", "repo:read"] };
-    case 'send_slack_message':
-      return { risk_level: "low", requested_scopes: ["chat:write"] };
-    default:
-      return { risk_level: "low", requested_scopes: [] };
+  const tool = TOOLS_MAP[action.name];
+  const risk_level = tool?.risk_level ?? "low";
+  const requested_scopes = tool?.scopes ?? [];
+
+  console.log(`[risk_classifier] "${action.name}" → ${risk_level}`);
+  return { risk_level, requested_scopes };
+}
+
+async function actionExecutionNode(state: AgentStateType, config: any) {
+  const action = state.pending_action;
+  const args = action?.args ?? {};
+
+  // Handle rejection
+  if (state.approval_status === "rejected") {
+    console.log("[action_execution] Action REJECTED by user.");
+    return toolResult(action, "The user rejected this action. Inform them and do not retry.");
+  }
+
+  // Get GitHub token if needed
+  let githubToken: string | null = null;
+  if (action?.name?.includes("github") || action?.name?.includes("repo") || action?.name?.includes("pull") || action?.name?.includes("branch") || action?.name?.includes("release") || action?.name?.includes("issue")) {
+    const userId: string | undefined = config?.configurable?.auth0UserId;
+    if (!userId) return toolResult(action, "Error: No Auth0 user session. Please log in.");
+
+    try {
+      githubToken = await getGitHubToken(userId);
+      console.log("[action_execution] GitHub token retrieved via Auth0 Management API.");
+    } catch (err: any) {
+      return toolResult(action, `Error retrieving GitHub token: ${err.message}`);
+    }
+  }
+
+  // Execute the tool
+  try {
+    const result = await executeTool(action!.name, args, githubToken);
+    console.log("[action_execution] Success:", result.slice(0, 100));
+    return toolResult(action, result);
+  } catch (err: any) {
+    console.error("[action_execution] Error:", err.message);
+    return toolResult(action, `Action failed: ${err.message}`);
   }
 }
 
-async function actionExecutionNode(state: AgentStateType) {
-  const action = state.pending_action;
+// ─── Tool Executor ────────────────────────────────────────────────────────────
 
-  if (state.approval_status === "rejected") {
-    console.log("[Node: action_execution] Human REJECTED the action. Skipping execution.");
-    return {
-      messages: [
-        new ToolMessage({
-          tool_call_id: action.id,
-          name: action.name,
-          content: "The user REJECTED this action. Do not attempt again. Inform the user."
-        })
-      ],
-      approval_status: null,
-      risk_level: null,
-      pending_action: null
-    };
+async function executeTool(name: string, args: Record<string, any>, token: string | null): Promise<string> {
+  const t = token!; // GitHub token (non-null for all github tools)
+
+  switch (name) {
+    // Read-only
+    case "list_github_repos":       return formatRepos(await gh.listRepos(t));
+    case "get_github_repo":         return gh.getRepo(t, args.owner, args.repo);
+    case "list_github_issues":      return gh.listIssues(t, args.owner, args.repo, args.state);
+    case "list_pull_requests":      return gh.listPullRequests(t, args.owner, args.repo, args.state);
+    case "list_branches":           return gh.listBranches(t, args.owner, args.repo);
+
+    // Write
+    case "create_github_issue":     return gh.createIssue(t, args.owner, args.repo, args.title, args.body);
+    case "close_github_issue":      return gh.closeIssue(t, args.owner, args.repo, args.issue_number);
+    case "create_pull_request":     return gh.createPullRequest(t, args.owner, args.repo, args.title, args.head, args.base, args.body);
+    case "create_branch":           return gh.createBranch(t, args.owner, args.repo, args.branch, args.from_branch);
+    case "create_release":          return gh.createRelease(t, args.owner, args.repo, args.tag, args.name, args.body);
+
+    // Destructive
+    case "merge_pull_request":      return gh.mergePullRequest(t, args.owner, args.repo, args.pr_number);
+    case "delete_github_repo":      return gh.deleteRepo(t, args.owner, args.repo);
+
+    // Slack
+    case "send_slack_message":
+      return `[Demo] Slack message sent to ${args.channel}: "${args.message}"`;
+
+    default:
+      return `Unknown tool: ${name}`;
   }
+}
 
-  console.log("[Node: action_execution] Fetching Auth0 token and running the tool...");
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-  // Phase 5: Fetch token from Auth0 Token Vault
-  // Phase 5: Run the tool (e.g., call Slack API)
-
-  console.log("[Node: action_execution] Tool executed successfully.");
+function toolResult(action: any, content: string) {
   return {
-    messages: [
-      new ToolMessage({
-        tool_call_id: action.id,
-        name: action.name,
-        content: "Tool executed successfully."
-      })
-    ],
+    messages: [new ToolMessage({ tool_call_id: action.id, name: action.name, content })],
     approval_status: null,
     risk_level: null,
-    pending_action: null
+    pending_action: null,
   };
 }
 
-function routeAfterClassification(state: AgentStateType) {
-  // If the agent didn't want to run any tools, we are finished!
-  if (!state.pending_action) {
-    return END;
-  }
-
-  // Whether it is "low" or "high", we want to eventually go to 'action_execution'.
-  // We will handle the "pause" mechanism when we compile the graph below.
-  return "action_execution";
+function formatRepos(repos: any[]): string {
+  if (repos.length === 0) return "No repositories found.";
+  return repos.map((r) =>
+    `• ${r.name} (${r.private ? "private" : "public"})${r.language ? ` [${r.language}]` : ""}${r.stars ? ` ⭐${r.stars}` : ""}`
+  ).join("\n");
 }
 
-// 3. Build the StateGraph (The Flow-Chart)
+// ─── Graph Routing ────────────────────────────────────────────────────────────
+
+function routeAfterClassification(state: AgentStateType) {
+  return state.pending_action ? "action_execution" : END;
+}
+
+// ─── Graph Construction ───────────────────────────────────────────────────────
 
 const builder = new StateGraph(AgentState)
   .addNode("agent", agentNode)
   .addNode("risk_classifier", riskClassifierNode)
   .addNode("action_execution", actionExecutionNode)
-
-  // 1. We start at the AI agent
   .addEdge(START, "agent")
-
-  // 2. After the agent thinks, we ALWAYS classify the risk
   .addEdge("agent", "risk_classifier")
-
-  // 3. After classification, we decide where to go (run the tool or end)
   .addConditionalEdges("risk_classifier", routeAfterClassification)
-
-  // 4. After the tool executes, we go back to the agent so it can see the results
   .addEdge("action_execution", "agent");
 
-// 4. Persistence & Compiling
-
-// The Checkpointer ensures that if our graph pauses for human approval, 
-// the memory doesn't disappear if the server restarts or the user closes the tab.
-// (For local development we use MemorySaver, in prod we'd use Postgres).
 export const checkpointer = new MemorySaver();
 
 export const agentGraph = builder.compile({
-  checkpointer: checkpointer,
-
-  // We tell LangGraph to put a generic BREAKPOINT right before the 'action_execution' node runs.
-  // Because of this, any time the graph reaches 'action_execution', it will physically stop running
-  // and wait for you to call `.invoke(..., { resume: true })` from the next.js frontend.
-  interruptBefore: ["action_execution"]
+  checkpointer,
+  interruptBefore: ["action_execution"],
 });
