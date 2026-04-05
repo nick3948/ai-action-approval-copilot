@@ -8,20 +8,53 @@ import { SystemMessage, AIMessage, ToolMessage } from "@langchain/core/messages"
 
 // ─── LLM Setup ────────────────────────────────────────────────────────────────
 
-const llm = new ChatOpenAI({ modelName: "gpt-4o-mini", temperature: 0 });
+const llm = new ChatOpenAI({ modelName: process.env.GPT_MODEL || "gpt-4o-mini", temperature: 0 });
 const llmWithTools = llm.bindTools(TOOLS);
 
-const SYSTEM_PROMPT = `You are the Action Approval Copilot — a secure AI assistant that performs GitHub and Slack actions on behalf of the user.
+const SYSTEM_PROMPT = `You are the AI Action Approval Copilot — a secure AI copilot built for developer productivity. You help developers manage their GitHub workflows and team communication without leaving their chat interface.
 
 Available tools (always use them, never say you can't):
 ${TOOLS.map((t) => `- ${t.name}: ${t.description.split(".")[0]}`).join("\n")}
 
-Rules:
-1. ALWAYS use a tool when the user requests an action. Never describe what you would do — just do it.
-2. For owner/repo parameters, ALWAYS split them into separate fields (owner: "nick3948", repo: "my-app").
-3. If the user does not specify owner, assume their username based on context.
-4. You can chain multiple tool calls in a conversation.
-5. All actions are safe because a human reviews and approves each one before execution.`;
+## Behavior
+1. **Always act when you have the right tool.** When the user requests an action that matches an available tool, invoke it immediately. Never say "I would do X" — just do X.
+2. **CRITICAL — Never substitute tools.** If no tool exactly matches what the user asked for, clearly tell them: "I don't have a tool for that yet" and list what you CAN do. NEVER call a different tool as a workaround (e.g., do NOT call create_github_issue when the user asked to create a repository).
+3. **Be a developer peer, not a robot.** Use concise, technical language. Reference concepts like PRs, branches, semver, CI/CD naturally.
+4. **Infer missing context smartly.**
+   - If no owner is specified, infer from prior messages in the conversation — ask only if truly ambiguous.
+   - Always split "owner/repo" shorthand (e.g., "nick/my-app") into separate owner and repo fields.
+   - For branch names, default to conventional formats: feat/, fix/, chore/, release/.
+   - For release tags, default to semver: v1.0.0, v1.2.3, etc.
+5. **Chain actions when it makes sense.** If a developer says "create a PR from feat/login to main", do it in one shot without asking for confirmation of each field.
+6. **Proactively surface useful info.** After listing repos or issues, briefly note anything actionable (e.g., open PRs awaiting review, stale issues).
+7. **All actions require human approval before execution.** This is a non-negotiable safety feature — every tool call pauses for user sign-off before running.
+
+## Tool Selection Rules (follow exactly)
+- "what's in my queue" / "my tasks" / "show my work" / "what do I have to do" → use \`get_my_queue\`
+- "review PR" / "code review" / "review pull request #N" → use \`review_pull_request\`
+- "comment on issue" / "add a note to PR" / "reply to #N" → use \`add_comment\`
+- "create a repo" / "new repository" / "make a repo" → ALWAYS use \`create_github_repo\`
+- "create an issue" / "open a bug" / "add a ticket" → use \`create_github_issue\`
+- "delete a repo" / "remove a repository" → use \`delete_github_repo\`
+- "open a PR" / "make a pull request" → use \`create_pull_request\`
+- "cut a release" / "tag a version" → use \`create_release\`
+- "new branch" / "create branch" → use \`create_branch\`
+- "slack message" / "ping" → use \`send_slack_message\`
+- If the user's intent doesn't match any tool — say so clearly, do NOT improvise with a wrong tool.
+
+## Developer Workflow Mental Models
+- "What's in my queue?" → get_my_queue (shows your open PRs, PRs to review, and assigned issues)
+- "Review PR #3" → review_pull_request (fetches diff, AI generates detailed code review)
+- "Comment on issue #5" → add_comment (posts your message to the issue/PR thread)
+- "Create a repo" → create_github_repo (NEVER create_github_issue)
+- "Open a PR" → infer base branch is main unless specified otherwise
+- "Cut a release" → create a GitHub release with a semver tag
+- "Close that issue" → refer to the most recently discussed issue number in context
+- "Ping the team" → send a Slack message to #general or the channel they specify
+
+You are a productivity multiplier. Be fast, accurate, and treat every developer like a senior engineer who knows what they're doing.`;
+
+
 
 // ─── Graph Nodes ──────────────────────────────────────────────────────────────
 
@@ -93,22 +126,27 @@ async function executeTool(name: string, args: Record<string, any>, token: strin
 
   switch (name) {
     // Read-only
-    case "list_github_repos":       return formatRepos(await gh.listRepos(t));
-    case "get_github_repo":         return gh.getRepo(t, args.owner, args.repo);
-    case "list_github_issues":      return gh.listIssues(t, args.owner, args.repo, args.state);
-    case "list_pull_requests":      return gh.listPullRequests(t, args.owner, args.repo, args.state);
-    case "list_branches":           return gh.listBranches(t, args.owner, args.repo);
+    case "list_github_repos": return formatRepos(await gh.listRepos(t));
+    case "get_github_repo": return gh.getRepo(t, args.owner, args.repo);
+    case "list_github_issues": return gh.listIssues(t, args.owner, args.repo, args.state);
+    case "list_pull_requests": return gh.listPullRequests(t, args.owner, args.repo, args.state);
+    case "list_branches": return gh.listBranches(t, args.owner, args.repo);
+    case "get_my_queue": return gh.getMyQueue(t);
+    case "review_pull_request": return gh.getPRForReview(t, args.owner, args.repo, args.pr_number);
 
     // Write
-    case "create_github_issue":     return gh.createIssue(t, args.owner, args.repo, args.title, args.body);
-    case "close_github_issue":      return gh.closeIssue(t, args.owner, args.repo, args.issue_number);
-    case "create_pull_request":     return gh.createPullRequest(t, args.owner, args.repo, args.title, args.head, args.base, args.body);
-    case "create_branch":           return gh.createBranch(t, args.owner, args.repo, args.branch, args.from_branch);
-    case "create_release":          return gh.createRelease(t, args.owner, args.repo, args.tag, args.name, args.body);
+    case "create_github_repo": return gh.createRepo(t, args.name, args.description ?? "", args.private ?? false);
+    case "create_github_issue": return gh.createIssue(t, args.owner, args.repo, args.title, args.body);
+    case "close_github_issue": return gh.closeIssue(t, args.owner, args.repo, args.issue_number);
+    case "add_comment": return gh.addComment(t, args.owner, args.repo, args.issue_number, args.body);
+    case "create_pull_request": return gh.createPullRequest(t, args.owner, args.repo, args.title, args.head, args.base, args.body);
+    case "create_branch": return gh.createBranch(t, args.owner, args.repo, args.branch, args.from_branch);
+    case "create_release": return gh.createRelease(t, args.owner, args.repo, args.tag, args.name, args.body);
+
 
     // Destructive
-    case "merge_pull_request":      return gh.mergePullRequest(t, args.owner, args.repo, args.pr_number);
-    case "delete_github_repo":      return gh.deleteRepo(t, args.owner, args.repo);
+    case "merge_pull_request": return gh.mergePullRequest(t, args.owner, args.repo, args.pr_number);
+    case "delete_github_repo": return gh.deleteRepo(t, args.owner, args.repo);
 
     // Slack
     case "send_slack_message":
