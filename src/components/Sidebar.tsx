@@ -42,14 +42,25 @@ export function Sidebar() {
   const confirmDelete = () => {
     if (!deleteTarget) return;
     const newHistory = history.filter(h => h.id !== deleteTarget.id);
-    localStorage.setItem("chat_history", JSON.stringify(newHistory));
-    setHistory(newHistory);
 
-    // If we delete what we are currently looking at, navigate away!
     if (currentChatId === deleteTarget.id) {
-      if (newHistory.length > 0) router.push(`/?chatId=${newHistory[0].id}`);
-      else handleNewChat();
+      if (newHistory.length > 0) {
+        localStorage.setItem("chat_history", JSON.stringify(newHistory));
+        setHistory(newHistory);
+        router.push(`/?chatId=${newHistory[0].id}`);
+      } else {
+        const newId = Math.random().toString(36).substring(2, 10);
+        const freshHistory = [{ id: newId, title: "New Conversation", date: Date.now() }];
+        localStorage.setItem("chat_history", JSON.stringify(freshHistory));
+        setHistory(freshHistory);
+        router.push(`/?chatId=${newId}`);
+      }
+    } else {
+      localStorage.setItem("chat_history", JSON.stringify(newHistory));
+      setHistory(newHistory);
     }
+
+    window.dispatchEvent(new Event("chatHistoryUpdated"));
     setDeleteTarget(null);
   };
 
@@ -91,8 +102,8 @@ export function Sidebar() {
             key={chat.id}
             onClick={() => router.push(`/?chatId=${chat.id}`)}
             className={`w-full group flex items-center justify-between px-3 py-2.5 rounded-xl text-left text-sm transition-all ${currentChatId === chat.id
-                ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white font-semibold shadow-sm ring-1 ring-slate-200 dark:ring-slate-700/50'
-                : 'text-slate-600 dark:text-slate-400 hover:bg-white/50 dark:hover:bg-slate-800/30'
+              ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white font-semibold shadow-sm ring-1 ring-slate-200 dark:ring-slate-700/50'
+              : 'text-slate-600 dark:text-slate-400 hover:bg-white/50 dark:hover:bg-slate-800/30'
               }`}
           >
             <div className="flex items-center gap-3 overflow-hidden">
