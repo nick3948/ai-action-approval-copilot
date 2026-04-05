@@ -9,12 +9,12 @@
     "lint": "eslint"
   },
   "dependencies": {
-
     "@auth0/nextjs-auth0": "^4.16.0",
     "@langchain/core": "^1.1.31",
     "@langchain/langgraph": "^1.2.1",
     "@langchain/openai": "^1.2.12",
     "@tailwindcss/typography": "^0.5.19",
+    "@vercel/analytics": "^2.0.1",
     "clsx": "^2.1.1",
     "framer-motion": "^12.35.2",
     "lucide-react": "^0.577.0",
