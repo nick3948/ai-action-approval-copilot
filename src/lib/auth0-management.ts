@@ -1,14 +1,21 @@
 /**
  * Auth0 Management API helper
+ *
+ * Token lifecycle:
+ *  - Auth0 M2M tokens expire in 86400s (24h) by default
+ *  - We cache with a 5-minute proactive refresh window (token refreshed
+ *    5 min before actual expiry, not just 60s) — safer for long sessions
+ *  - Singleton promise guards against concurrent refreshes (thundering herd):
+ *    if N requests arrive simultaneously with an expired token, only ONE
+ *    HTTP call is made to Auth0; the rest await the same promise
  */
 
 let mgmtTokenCache: { token: string; expiresAt: number } | null = null;
+let mgmtTokenInflight: Promise<string> | null = null;
 
-async function getManagementAPIToken(): Promise<string> {
-  if (mgmtTokenCache && Date.now() < mgmtTokenCache.expiresAt) {
-    return mgmtTokenCache.token;
-  }
+const REFRESH_BUFFER_MS = 5 * 60 * 1000; // refresh 5 min before actual expiry
 
+async function fetchFreshToken(): Promise<string> {
   const res = await fetch(`https://${process.env.AUTH0_DOMAIN}/oauth/token`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -25,10 +32,29 @@ async function getManagementAPIToken(): Promise<string> {
 
   mgmtTokenCache = {
     token: data.access_token,
-    expiresAt: Date.now() + (data.expires_in - 60) * 1000,
+    expiresAt: Date.now() + data.expires_in * 1000 - REFRESH_BUFFER_MS,
   };
   return data.access_token;
 }
+
+async function getManagementAPIToken(): Promise<string> {
+  // Fast path: valid cached token, no network call needed
+  if (mgmtTokenCache && Date.now() < mgmtTokenCache.expiresAt) {
+    return mgmtTokenCache.token;
+  }
+
+  // Slow path: token missing or about to expire.
+  // Deduplicate concurrent requests — if a fetch is already in-flight,
+  // all callers share that same promise instead of each firing a new one.
+  if (!mgmtTokenInflight) {
+    mgmtTokenInflight = fetchFreshToken().finally(() => {
+      mgmtTokenInflight = null;
+    });
+  }
+
+  return mgmtTokenInflight;
+}
+
 
 /**
  * Fetches the Auth0 user profile with all linked identities.

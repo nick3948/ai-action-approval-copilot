@@ -31,6 +31,31 @@ export async function POST(req: Request) {
     if (actionResponse) {
       console.log(`[API] Resuming graph for user ${session.user.sub}. Action: ${actionResponse}`);
 
+      // ── Auth0 Step-Up Verification (server-side) ───────────────────────────
+      // For critical actions (e.g., delete_github_repo), verify the session is fresh.
+      // auth_time = when the user last authenticated (set by Auth0 on login / step-up).
+      // We require this to be within the last 10 minutes to enforce step-up intent.
+      if (actionResponse === "approved") {
+        const graphState = await agentGraph.getState({
+          configurable: { thread_id: `${session.user.sub}-${body.chatId || "default"}` }
+        });
+        const currentRiskLevel = graphState?.values?.risk_level;
+
+        if (currentRiskLevel === "critical") {
+          const authTime = (session.user as any).auth_time as number | undefined;
+          const tenMinutesAgo = Math.floor(Date.now() / 1000) - 600;
+
+          if (authTime && authTime < tenMinutesAgo) {
+            console.warn(`[API] Step-up required: auth_time ${authTime} is older than 10 minutes.`);
+            return NextResponse.json(
+              { error: "step_up_required", message: "Please re-verify your identity before executing this critical action." },
+              { status: 403 }
+            );
+          }
+          console.log(`[API] Step-up verified: critical action approved by freshly authenticated session.`);
+        }
+      }
+
       await agentGraph.updateState(config, {
         approval_status: actionResponse
       });

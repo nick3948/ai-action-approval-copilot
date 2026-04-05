@@ -66,8 +66,37 @@ export const TOOLS: ToolDefinition[] = [
     risk_level: "low",
     scopes: ["repo:read"],
   },
+  {
+    name: "get_my_queue",
+    description: "Show the developer's personal work queue: open PRs they authored, PRs awaiting their review, and issues assigned to them — across ALL their repositories. Use when asked 'what's in my queue', 'what do I have to do', 'show my tasks', 'what PRs do I have open', etc.",
+    schema: z.object({}),
+    risk_level: "low",
+    scopes: ["repo:read"],
+  },
+  {
+    name: "review_pull_request",
+    description: "Perform an AI-powered code review of a specific pull request. Retrieves the PR diff and changed files, then produces detailed feedback: bugs, security issues, performance concerns, and improvement suggestions.",
+    schema: z.object({
+      owner: z.string().describe("Repository owner"),
+      repo: z.string().describe("Repository name"),
+      pr_number: z.number().describe("The pull request number to review"),
+    }),
+    risk_level: "low",
+    scopes: ["repo:read"],
+  },
 
   // ─── Write GitHub ─────────────────────────────────────────────────────────
+  {
+    name: "create_github_repo",
+    description: "Create a new GitHub repository for the authenticated user. Use when the user asks to create, initialise, or set up a new repository.",
+    schema: z.object({
+      name: z.string().describe("Repository name (no spaces, use hyphens)"),
+      description: z.string().default("").describe("Short description of the repository"),
+      private: z.boolean().default(false).describe("Whether the repository should be private (default: public)"),
+    }),
+    risk_level: "medium",
+    scopes: ["repo:write"],
+  },
   {
     name: "create_github_issue",
     description: "Create a new issue in a GitHub repository.",
@@ -87,6 +116,18 @@ export const TOOLS: ToolDefinition[] = [
       owner: z.string().describe("Repository owner"),
       repo: z.string().describe("Repository name"),
       issue_number: z.number().describe("The issue number to close"),
+    }),
+    risk_level: "medium",
+    scopes: ["repo:write"],
+  },
+  {
+    name: "add_comment",
+    description: "Add a comment to a GitHub issue or pull request. Use when the user wants to post a comment, reply, or leave feedback on an issue or PR.",
+    schema: z.object({
+      owner: z.string().describe("Repository owner"),
+      repo: z.string().describe("Repository name"),
+      issue_number: z.number().describe("The issue or PR number to comment on"),
+      body: z.string().describe("The comment text to post"),
     }),
     risk_level: "medium",
     scopes: ["repo:write"],

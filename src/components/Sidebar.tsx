@@ -148,6 +148,28 @@ export function Sidebar() {
           </div>
         </div>
       )}
+      {/* Security Model Legend */}
+      <div className="p-4 border-t border-slate-800/50 space-y-2">
+        <p className="text-[9px] font-bold uppercase tracking-widest text-slate-600">Security Model</p>
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" />
+            <span className="text-[10px] text-slate-500 font-mono">Low → Approve / Reject</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 shrink-0" />
+            <span className="text-[10px] text-slate-500 font-mono">Medium → Type to confirm</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-orange-400 shrink-0" />
+            <span className="text-[10px] text-slate-500 font-mono">High → Type to confirm</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0" />
+            <span className="text-[10px] text-slate-500 font-mono">Critical → Auth0 Step-Up</span>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
