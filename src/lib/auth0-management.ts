@@ -128,6 +128,36 @@ export async function linkAccountsInAuth0(primaryUserId: string, secondaryUserId
   console.log(`[linkAccountsInAuth0] Successfully linked!`);
 }
 
+export async function disconnectService(auth0UserId: string, targetProvider: string) {
+  const mgmtToken = await getManagementAPIToken();
+  const user = await getUserProfile(auth0UserId);
+  const identities = user.identities ?? [];
+
+  const identityToDrop = identities.find((id: any) => id.provider === targetProvider || id.connection?.includes(targetProvider) || id.provider?.includes(targetProvider));
+
+  if (!identityToDrop) {
+    throw new Error(`Cannot find connected identity for ${targetProvider}`);
+  }
+
+  const primaryId = encodeURIComponent(auth0UserId);
+  const secondaryProvider = encodeURIComponent(identityToDrop.provider);
+  const secondaryUserId = encodeURIComponent(identityToDrop.user_id);
+
+  console.log(`[disconnectService] Dropping ${secondaryProvider}|${secondaryUserId} from ${primaryId}`);
+
+  const res = await fetch(`https://${process.env.AUTH0_DOMAIN}/api/v2/users/${primaryId}/identities/${secondaryProvider}/${secondaryUserId}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${mgmtToken}` }
+  });
+
+  if (!res.ok) {
+    const errorText = await res.text();
+    console.error(`[disconnectService] Failed: ${errorText}`);
+    throw new Error(`Auth0 Disconnect Failed: ${errorText}`);
+  }
+}
+
+
 /**
  * Returns the GitHub access token for a user.
  * Works whether GitHub is the primary login or a linked identity.
@@ -177,3 +207,22 @@ export async function getServiceToken(auth0UserId: string, provider: string): Pr
   }
   return identity.access_token;
 }
+
+/**
+ * Gets the actual display name from the connected Slack profile inside Auth0,
+ * specifically bypassing the root session email identity.
+ */
+export async function getSlackProfileName(auth0UserId: string): Promise<string | null> {
+  try {
+    const identities = await getAllIdentitiesByEmail(auth0UserId);
+    const slackIdentity = identities.find((id: any) => id.provider === "slack" || id.connection?.includes("slack") || id.provider?.includes("slack"));
+    
+    if (slackIdentity?.profileData?.name) {
+      return slackIdentity.profileData.name;
+    }
+  } catch(e) {
+    console.error("[getSlackProfileName] Error fetching identity", e);
+  }
+  return null;
+}
+
