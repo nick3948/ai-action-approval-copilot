@@ -38,6 +38,13 @@ export const AgentState = Annotation.Root({
     reducer: (currentState, newValue) => newValue !== undefined ? newValue : currentState,
     default: () => [],
   }),
+
+  // 6. Authenticated GitHub username — resolved once from /user and cached for the thread.
+  //    Used to auto-fill the `owner` field so the LLM never needs to guess.
+  github_username: Annotation<string | null>({
+    reducer: (currentState, newValue) => newValue !== undefined ? newValue : currentState,
+    default: () => null,
+  }),
 });
 
 export type AgentStateType = typeof AgentState.State;

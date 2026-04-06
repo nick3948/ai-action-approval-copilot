@@ -28,6 +28,13 @@ async function ghFetch(token: string, path: string, options: RequestInit = {}) {
   return data;
 }
 
+// ─── Authenticated User ───────────────────────────────────────────────────────
+
+export async function getAuthenticatedUser(token: string): Promise<{ login: string; name: string | null }> {
+  const data = await ghFetch(token, "/user");
+  return { login: data.login as string, name: data.name as string | null };
+}
+
 // ─── Repositories ────────────────────────────────────────────────────────────
 
 export async function listRepos(token: string) {

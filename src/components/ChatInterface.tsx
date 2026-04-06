@@ -34,12 +34,10 @@ export function ChatInterface({ user }: { user: any }) {
         };
 
         recognitionRef.current.onresult = (event: any) => {
-          console.log("[Voice] Received speech result!", event);
 
           const latestResult = event.results[event.results.length - 1];
           if (latestResult.isFinal) {
             const transcriptChunk = latestResult[0].transcript.trim();
-            console.log("[Voice] Extracted clean text:", transcriptChunk);
             setInput((prev) => (prev.trim() ? prev + ' ' + transcriptChunk : transcriptChunk));
           }
         };

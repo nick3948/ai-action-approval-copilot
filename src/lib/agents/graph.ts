@@ -5,26 +5,67 @@ import { AgentState, AgentStateType } from "./state";
 import { TOOLS, TOOLS_MAP } from "./tools";
 import { getServiceToken, getSlackProfileName } from "@/lib/auth0-management";
 import * as gh from "@/lib/github-api";
+import { getAuthenticatedUser } from "@/lib/github-api";
 import * as slack from "@/lib/slack-api";
 import { ChatOpenAI } from "@langchain/openai";
 import { SystemMessage, AIMessage, ToolMessage } from "@langchain/core/messages";
+
+// ─── In-process caches (survive across warm serverless invocations) ────────────
+
+/** GitHub access token per Auth0 user — 15 min TTL (token rarely changes mid-session) */
+const ghTokenCache = new Map<string, { token: string; cachedAt: number }>();
+const GH_TOKEN_TTL_MS = 15 * 60 * 1000;
+
+/** Repo list per GitHub token — 5 min TTL (repos don't change mid-session) */
+const repoListCache = new Map<string, { names: string[]; cachedAt: number }>();
+const REPO_LIST_TTL_MS = 5 * 60 * 1000;
+
+async function getCachedGithubToken(userId: string): Promise<string> {
+  const cached = ghTokenCache.get(userId);
+  if (cached && Date.now() - cached.cachedAt < GH_TOKEN_TTL_MS) return cached.token;
+  const token = await getServiceToken(userId, "github");
+  ghTokenCache.set(userId, { token, cachedAt: Date.now() });
+  return token;
+}
+
+async function getCachedRepoNames(token: string): Promise<string[]> {
+  const cached = repoListCache.get(token);
+  if (cached && Date.now() - cached.cachedAt < REPO_LIST_TTL_MS) return cached.names;
+  const repos = await gh.listRepos(token);
+  const names = repos.map((r) => r.name.includes("/") ? r.name.split("/")[1] : r.name);
+  repoListCache.set(token, { names, cachedAt: Date.now() });
+  return names;
+}
 
 // ─── LLM Setup ────────────────────────────────────────────────────────────────
 
 const llm = new ChatOpenAI({ modelName: process.env.GPT_MODEL || "gpt-4o-mini", temperature: 0 });
 const llmWithTools = llm.bindTools(TOOLS);
 
-const SYSTEM_PROMPT = `You are the AI Action Approval Copilot — a secure AI copilot built for developer productivity. You help developers manage their GitHub workflows and team communication without leaving their chat interface.
+function buildSystemPrompt(githubUsername?: string | null) {
+  const ownerContext = githubUsername
+    ? `
+## Authenticated User
+The currently authenticated GitHub user is **${githubUsername}**.
+- When the user says "my repo", "my issues", "my PRs" etc., always use **${githubUsername}** as the owner.
+- NEVER guess or infer a different owner. If a different owner is explicitly stated by the user, use that — otherwise always default to **${githubUsername}**.
+`
+    : `
+## Authenticated User
+The GitHub username is not yet known. If an action requires an owner and the user has not specified one, ask: "What is the GitHub username or org that owns this repo?". Do not guess.
+`;
+
+  return `You are the AI Action Approval Copilot — a secure AI copilot built for developer productivity. You help developers manage their GitHub workflows and team communication without leaving their chat interface.
 
 Available tools (always use them, never say you can't):
 ${TOOLS.map((t) => `- ${t.name}: ${t.description.split(".")[0]}`).join("\n")}
-
+${ownerContext}
 ## Behavior
 1. **Always act when you have the right tool.** When the user requests an action that matches an available tool, invoke it immediately. Never say "I would do X" — just do X.
 2. **CRITICAL — Never substitute tools.** If no tool exactly matches what the user asked for, clearly tell them: "I don't have a tool for that yet" and list what you CAN do. NEVER call a different tool as a workaround (e.g., do NOT call create_github_issue when the user asked to create a repository).
 3. **Be a developer peer, not a robot.** Use concise, technical language. Reference concepts like PRs, branches, semver, CI/CD naturally.
 4. **Infer missing context smartly.**
-   - If no owner is specified, infer from prior messages in the conversation — ask only if truly ambiguous.
+   - Owner: use the authenticated GitHub username above. Only override if the user explicitly names a different owner/org.
    - Always split "owner/repo" shorthand (e.g., "nick/my-app") into separate owner and repo fields.
    - For branch names, default to conventional formats: feat/, fix/, chore/, release/.
    - For release tags, default to semver: v1.0.0, v1.2.3, etc.
@@ -67,14 +108,16 @@ ${TOOLS.map((t) => `- ${t.name}: ${t.description.split(".")[0]}`).join("\n")}
 - **Provide actionable next steps.** When pointing out issues or suggesting improvements, offer concrete steps or example code snippets if relevant.
 
 You are a productivity multiplier. Be fast, accurate, and treat every developer like a senior engineer who knows what they're doing. Treat every user query as if you are mentoring a capable developer, not just automating actions. Combine practical execution with deep technical guidance.`;
+}
 
 
 
 // ─── Graph Nodes ──────────────────────────────────────────────────────────────
 
-async function agentNode(state: AgentStateType) {
+async function agentNode(state: AgentStateType, config: any) {
   console.log("[agent] Thinking...");
-  const response = await llmWithTools.invoke([new SystemMessage(SYSTEM_PROMPT), ...state.messages]);
+  const systemPrompt = buildSystemPrompt(state.github_username);
+  const response = await llmWithTools.invoke([new SystemMessage(systemPrompt), ...state.messages]);
   const toolCalls = (response as AIMessage).tool_calls || [];
 
   if (toolCalls.length > 0) {
@@ -90,16 +133,36 @@ async function agentNode(state: AgentStateType) {
   return { messages: [response], pending_action: null };
 }
 
-async function riskClassifierNode(state: AgentStateType) {
+async function riskClassifierNode(state: AgentStateType, config: any) {
   const action = state.pending_action;
   if (!action?.name) return {};
 
   const tool = TOOLS_MAP[action.name];
   const risk_level = tool?.risk_level ?? "low";
   const requested_scopes = tool?.scopes ?? [];
+  const isAuto = action.args?._auto === true;
 
-  console.log(`[risk_classifier] "${action.name}" → ${risk_level}`);
-  return { risk_level, requested_scopes };
+  console.log(`[risk_classifier] "${action.name}" → ${risk_level}${isAuto ? " [auto/internal]" : ""}`);
+
+  // Resolve fuzzy repo name BEFORE the interrupt so the approval card shows the correct name
+  let correctedAction = action;
+  if (action.args?.repo) {
+    try {
+      const userId: string | undefined = config?.configurable?.auth0UserId;
+      if (userId) {
+        const githubToken = await getCachedGithubToken(userId);
+        const resolvedRepo = await resolveRepoName(githubToken, action.args.repo);
+        if (resolvedRepo !== action.args.repo) {
+          console.log(`[risk_classifier] Repo resolved: "${action.args.repo}" → "${resolvedRepo}"`);
+          correctedAction = { ...action, args: { ...action.args, repo: resolvedRepo } };
+        }
+      }
+    } catch (e) {
+      console.warn("[risk_classifier] Could not resolve repo name:", e);
+    }
+  }
+
+  return { risk_level, requested_scopes, pending_action: correctedAction, is_auto_action: isAuto };
 }
 
 async function actionExecutionNode(state: AgentStateType, config: any) {
@@ -109,20 +172,40 @@ async function actionExecutionNode(state: AgentStateType, config: any) {
   // Handle rejection
   if (state.approval_status === "rejected") {
     console.log("[action_execution] Action REJECTED by user.");
-    return toolResult(action, "The user rejected this action. Inform them and do not retry.");
+    return toolResult(action, "The user rejected this action. Inform them and do not retry.", state.github_username);
   }
 
   // Get GitHub token if needed
   let githubToken: string | null = null;
+  let resolvedGithubUsername: string | null = state.github_username ?? null;
+
   if (action?.name?.includes("github") || action?.name?.includes("repo") || action?.name?.includes("pull") || action?.name?.includes("branch") || action?.name?.includes("release") || action?.name?.includes("issue") || action?.name?.includes("queue") || action?.name?.includes("comment")) {
     const userId: string | undefined = config?.configurable?.auth0UserId;
-    if (!userId) return toolResult(action, "Error: No Auth0 user session. Please log in.");
+    if (!userId) return toolResult(action, "Error: No Auth0 user session. Please log in.", resolvedGithubUsername);
 
     try {
       githubToken = await getServiceToken(userId, "github");
       console.log("[action_execution] GitHub token retrieved via Auth0 Management API.");
+
+      // Always resolve the real GitHub login from the token (not from Auth0 nickname)
+      if (githubToken) {
+        try {
+          const ghUser = await getAuthenticatedUser(githubToken);
+          resolvedGithubUsername = ghUser.login;
+
+          // Auto-correct args.owner if the LLM guessed wrong or left it empty
+          if (args.owner !== undefined && args.owner !== resolvedGithubUsername) {
+            console.log(`[action_execution] Correcting owner: "${args.owner}" → "${resolvedGithubUsername}"`);
+            args.owner = resolvedGithubUsername;
+          } else if (!args.owner) {
+            args.owner = resolvedGithubUsername;
+          }
+        } catch (e) {
+          console.warn("[action_execution] Could not resolve GitHub username:", e);
+        }
+      }
     } catch (err: any) {
-      return toolResult(action, `Error retrieving GitHub token: ${err.message}`);
+      return toolResult(action, `Error retrieving GitHub token: ${err.message}`, resolvedGithubUsername);
     }
   }
 
@@ -154,16 +237,94 @@ async function actionExecutionNode(state: AgentStateType, config: any) {
   try {
     const result = await executeTool(action!.name, args, githubToken, slackToken);
     console.log("[action_execution] Success:", result.slice(0, 100));
-    return toolResult(action, result);
+    return toolResult(action, result, resolvedGithubUsername);
   } catch (err: any) {
     console.error("[action_execution] Error:", err.message);
-    return toolResult(action, `Action failed: ${err.message}`);
+    return toolResult(action, `Action failed: ${err.message}`, resolvedGithubUsername);
   }
 }
 
 // ─── Tool Executor ────────────────────────────────────────────────────────────
 
+/**
+ * Normalizes a repo name the user typed into a valid GitHub slug:
+ * "ai action approval copilot" → "ai-action-approval-copilot"
+ */
+function slugify(name: string): string {
+  return name
+    .trim()
+    // Split camelCase/PascalCase: "TextUtils" → "Text Utils", "myRepo" → "my Repo"
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .toLowerCase()
+    .replace(/[\s_]+/g, "-")
+    .replace(/[^a-z0-9-]/g, "");
+}
+
+/**
+ * Fuzzy-matches a user-provided repo name against the authenticated user's
+ * actual repo list. Returns the best matching repo name, or the slugified
+ * input if no good match is found.
+ *
+ * Strategy (in order):
+ *  1. Exact match (after slugifying both sides)
+ *  2. Slug of input is a substring of a real repo name (or vice versa)
+ *  3. Falls back to the slugified input as-is
+ */
+async function resolveRepoName(token: string, inputRepo: string): Promise<string> {
+  const slug = slugify(inputRepo);
+
+  let repoNames: string[];
+  try {
+    repoNames = await getCachedRepoNames(token);
+  } catch {
+    return slug; // can't fetch repos, use best guess
+  }
+
+  // 1. Exact slug match
+  const exact = repoNames.find((r) => slugify(r) === slug);
+  if (exact) return exact;
+
+  // 2. Substring match
+  const partial = repoNames.find(
+    (r) => slugify(r).includes(slug) || slug.includes(slugify(r))
+  );
+  if (partial) {
+    console.log(`[resolveRepoName] Fuzzy matched "${inputRepo}" → "${partial}"`);
+    return partial;
+  }
+
+  // 3. Token overlap (≥50%)
+  const inputTokens = slug.split("-").filter(Boolean);
+  let bestMatch: string | null = null;
+  let bestScore = 0;
+  for (const r of repoNames) {
+    const repoTokens = slugify(r).split("-").filter(Boolean);
+    const overlap = inputTokens.filter((t) => repoTokens.includes(t)).length;
+    const score = overlap / Math.max(inputTokens.length, repoTokens.length);
+    if (score > bestScore && score >= 0.5) {
+      bestScore = score;
+      bestMatch = r;
+    }
+  }
+  if (bestMatch) {
+    console.log(`[resolveRepoName] Token-matched "${inputRepo}" → "${bestMatch}" (score: ${bestScore.toFixed(2)})`);
+    return bestMatch;
+  }
+
+  return slug;
+}
+
 async function executeTool(name: string, args: Record<string, any>, githubToken: string | null, slackToken: string | null): Promise<string> {
+  // Strip _auto meta-field — it's a signal to the approval system, not a real API arg
+  const { _auto, ...cleanArgs } = args;
+  args = cleanArgs;
+
+  // Auto-resolve fuzzy repo names before any GitHub API call
+  if (githubToken && args.repo) {
+    args.repo = await resolveRepoName(githubToken, args.repo);
+  }
+
   switch (name) {
     // Read-only
     case "list_github_repos": return formatRepos(await gh.listRepos(githubToken!));
@@ -199,12 +360,13 @@ async function executeTool(name: string, args: Record<string, any>, githubToken:
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function toolResult(action: any, content: string) {
+function toolResult(action: any, content: string, githubUsername?: string | null) {
   return {
     messages: [new ToolMessage({ tool_call_id: action.id, name: action.name, content })],
     approval_status: null,
     risk_level: null,
     pending_action: null,
+    ...(githubUsername != null ? { github_username: githubUsername } : {}),
   };
 }
 

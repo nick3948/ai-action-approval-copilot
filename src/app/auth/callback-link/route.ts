@@ -12,7 +12,6 @@ export async function GET(req: NextRequest) {
 
   if (linkPrimaryUserId && linkPrimaryUserId !== session.user.sub) {
     try {
-      console.log(`[callback-link] Linking ${session.user.sub} into ${linkPrimaryUserId}`);
       await linkAccountsInAuth0(linkPrimaryUserId, session.user.sub);
     } catch (err) {
       console.error("[callback-link] Linking failed", err);

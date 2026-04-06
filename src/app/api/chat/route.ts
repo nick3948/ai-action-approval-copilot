@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { auth0 } from "@/lib/auth0";
 import { agentGraph } from "@/lib/agents/graph";
 import { HumanMessage } from "@langchain/core/messages";
+import { getGitHubUsername } from "@/lib/auth0-management";
 
 export async function POST(req: Request) {
   try {
@@ -15,7 +16,6 @@ export async function POST(req: Request) {
     const { messages, actionResponse, chatId = "default" } = body;
 
     // 2. Grab the Auth0 refresh token from the session.
-    // This will be used by Auth0 AI SDK's Token Vault to exchange for a GitHub access token.
     const refreshToken = (session.tokenSet as any)?.refreshToken as string | undefined;
 
     const config = {
@@ -27,12 +27,9 @@ export async function POST(req: Request) {
       }
     };
 
-    //  4. THE RESUME FLOW (Human clicked Approve or Reject) 
+    //  4. THE RESUME FLOW (Human clicked Approve or Reject)
     if (actionResponse) {
-      console.log(`[API] Resuming graph for user ${session.user.sub}. Action: ${actionResponse}`);
-
       // ── Auth0 Step-Up Verification (server-side) ───────────────────────────
-      // We require this to be within the last 10 minutes to enforce step-up intent.
       if (actionResponse === "approved") {
         const graphState = await agentGraph.getState({
           configurable: { thread_id: `${session.user.sub}-${body.chatId || "default"}` }
@@ -50,13 +47,10 @@ export async function POST(req: Request) {
               { status: 403 }
             );
           }
-          console.log(`[API] Step-up verified: critical action approved by freshly authenticated session.`);
         }
       }
 
-      await agentGraph.updateState(config, {
-        approval_status: actionResponse
-      });
+      await agentGraph.updateState(config, { approval_status: actionResponse });
 
       const finalState = await agentGraph.invoke(null, config);
 
@@ -68,9 +62,17 @@ export async function POST(req: Request) {
       const latestText = messages[messages.length - 1].content;
       const humanMessage = new HumanMessage(latestText);
 
-      console.log(`[API] Invoking agent for user ${session.user.sub} with: "${latestText}"`);
+      // Resolve GitHub username (cached).
+      const currentState = await agentGraph.getState(config);
+      let githubUsername: string | null = currentState?.values?.github_username ?? null;
+      if (!githubUsername) {
+        githubUsername = await getGitHubUsername(session.user.sub as string).catch(() => null);
+      }
 
-      const finalState = await agentGraph.invoke({ messages: [humanMessage] }, config);
+      const initialState: Record<string, any> = { messages: [humanMessage] };
+      if (githubUsername) initialState.github_username = githubUsername;
+
+      let finalState = await agentGraph.invoke(initialState, config);
 
       return NextResponse.json({ state: finalState });
     }

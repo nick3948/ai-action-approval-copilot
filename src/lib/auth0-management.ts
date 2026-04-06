@@ -13,7 +13,11 @@
 let mgmtTokenCache: { token: string; expiresAt: number } | null = null;
 let mgmtTokenInflight: Promise<string> | null = null;
 
-const REFRESH_BUFFER_MS = 5 * 60 * 1000; // refresh 5 min before actual expiry
+// TTL matches the M2M token lifetime (24h). Survives for the process lifetime in serverless warm instances.
+const githubUsernameCache = new Map<string, { login: string; cachedAt: number }>();
+const GITHUB_USERNAME_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+const REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
 async function fetchFreshToken(): Promise<string> {
   const res = await fetch(`https://${process.env.AUTH0_DOMAIN}/oauth/token`, {
@@ -105,8 +109,6 @@ export async function linkAccountsInAuth0(primaryUserId: string, secondaryUserId
   const provider = secondaryUserId.split('|')[0];
   const secondaryIdWithoutProvider = secondaryUserId.substring(provider.length + 1);
 
-  console.log(`[linkAccountsInAuth0] Linking ${secondaryUserId} INTO ${primaryUserId}...`);
-
   const linkRes = await fetch(`https://${process.env.AUTH0_DOMAIN}/api/v2/users/${encodeURIComponent(primaryUserId)}/identities`, {
     method: "POST",
     headers: {
@@ -182,9 +184,6 @@ export async function getGitHubToken(auth0UserId: string): Promise<string> {
 export async function getConnectedServices(auth0UserId: string): Promise<Record<string, boolean>> {
   const identities: any[] = await getAllIdentitiesByEmail(auth0UserId);
 
-  console.log(`[getConnectedServices] Checking user: ${auth0UserId}`);
-  console.log(`[getConnectedServices] Unified identities found across email:`, JSON.stringify(identities, null, 2));
-
   return {
     github: identities.some((id) => id.provider === "github" || id.connection === "github"),
     slack: identities.some((id) => id.provider === "slack" || id.connection?.includes("slack") || id.provider?.includes("slack")),
@@ -209,6 +208,30 @@ export async function getServiceToken(auth0UserId: string, provider: string): Pr
 }
 
 /**
+ * Returns the authenticated GitHub username (login) for a user.
+ */
+export async function getGitHubUsername(auth0UserId: string): Promise<string | null> {
+  const cached = githubUsernameCache.get(auth0UserId);
+  if (cached && Date.now() - cached.cachedAt < GITHUB_USERNAME_CACHE_TTL_MS) {
+    return cached.login;
+  }
+
+  try {
+    const identities = await getAllIdentitiesByEmail(auth0UserId);
+    const githubIdentity = identities.find((id: any) => id.provider === "github" || id.connection === "github");
+    // Auth0 stores the GitHub login in profileData.nickname
+    const login = githubIdentity?.profileData?.nickname as string | undefined;
+    if (login) {
+      githubUsernameCache.set(auth0UserId, { login, cachedAt: Date.now() });
+      return login;
+    }
+  } catch (e) {
+    console.warn("[getGitHubUsername] Could not resolve GitHub login:", e);
+  }
+  return null;
+}
+
+/**
  * Gets the actual display name from the connected Slack profile inside Auth0,
  * specifically bypassing the root session email identity.
  */
@@ -216,11 +239,10 @@ export async function getSlackProfileName(auth0UserId: string): Promise<string |
   try {
     const identities = await getAllIdentitiesByEmail(auth0UserId);
     const slackIdentity = identities.find((id: any) => id.provider === "slack" || id.connection?.includes("slack") || id.provider?.includes("slack"));
-    
     if (slackIdentity?.profileData?.name) {
       return slackIdentity.profileData.name;
     }
-  } catch(e) {
+  } catch (e) {
     console.error("[getSlackProfileName] Error fetching identity", e);
   }
   return null;
