@@ -18,22 +18,20 @@ export async function POST(req: Request) {
     // This will be used by Auth0 AI SDK's Token Vault to exchange for a GitHub access token.
     const refreshToken = (session.tokenSet as any)?.refreshToken as string | undefined;
 
-    // 3. Thread ID uniquely identifies this user + chat session for LangGraph's checkpointer.
     const config = {
       configurable: {
         thread_id: `${session.user.sub}-${chatId}`,
         auth0RefreshToken: refreshToken,
         auth0UserId: session.user.sub as string,
+        auth0UserName: (session.user.name || session.user.nickname || session.user.email || "A developer") as string,
       }
     };
 
-    // --- 4. THE RESUME FLOW (Human clicked Approve or Reject) ---
+    //  4. THE RESUME FLOW (Human clicked Approve or Reject) 
     if (actionResponse) {
       console.log(`[API] Resuming graph for user ${session.user.sub}. Action: ${actionResponse}`);
 
       // ── Auth0 Step-Up Verification (server-side) ───────────────────────────
-      // For critical actions (e.g., delete_github_repo), verify the session is fresh.
-      // auth_time = when the user last authenticated (set by Auth0 on login / step-up).
       // We require this to be within the last 10 minutes to enforce step-up intent.
       if (actionResponse === "approved") {
         const graphState = await agentGraph.getState({
