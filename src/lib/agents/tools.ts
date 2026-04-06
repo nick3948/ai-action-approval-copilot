@@ -198,9 +198,9 @@ export const TOOLS: ToolDefinition[] = [
   // ─── Slack ────────────────────────────────────────────────────────────────
   {
     name: "send_slack_message",
-    description: "Send a message to a Slack channel or user.",
+    description: "Send a message to a Slack channel.",
     schema: z.object({
-      channel: z.string().describe("Slack channel name or user ID"),
+      channel: z.string().describe("Slack channel name"),
       message: z.string().describe("The message to send"),
     }),
     risk_level: "low",

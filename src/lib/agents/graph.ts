@@ -1,8 +1,9 @@
 import { StateGraph, START, END, MemorySaver } from "@langchain/langgraph";
 import { AgentState, AgentStateType } from "./state";
 import { TOOLS, TOOLS_MAP } from "./tools";
-import { getGitHubToken } from "@/lib/auth0-management";
+import { getServiceToken } from "@/lib/auth0-management";
 import * as gh from "@/lib/github-api";
+import * as slack from "@/lib/slack-api";
 import { ChatOpenAI } from "@langchain/openai";
 import { SystemMessage, AIMessage, ToolMessage } from "@langchain/core/messages";
 
@@ -101,16 +102,30 @@ async function actionExecutionNode(state: AgentStateType, config: any) {
     if (!userId) return toolResult(action, "Error: No Auth0 user session. Please log in.");
 
     try {
-      githubToken = await getGitHubToken(userId);
+      githubToken = await getServiceToken(userId, "github");
       console.log("[action_execution] GitHub token retrieved via Auth0 Management API.");
     } catch (err: any) {
       return toolResult(action, `Error retrieving GitHub token: ${err.message}`);
     }
   }
 
+  // Get Slack token if needed
+  let slackToken: string | null = null;
+  if (action?.name?.includes("slack")) {
+    const userId: string | undefined = config?.configurable?.auth0UserId;
+    if (!userId) return toolResult(action, "Error: No Auth0 user session. Please log in.");
+
+    try {
+      slackToken = await getServiceToken(userId, "slack");
+      console.log("[action_execution] Slack token retrieved via Auth0 Management API.");
+    } catch (err: any) {
+      return toolResult(action, `Error retrieving Slack token: ${err.message}`);
+    }
+  }
+
   // Execute the tool
   try {
-    const result = await executeTool(action!.name, args, githubToken);
+    const result = await executeTool(action!.name, args, githubToken, slackToken);
     console.log("[action_execution] Success:", result.slice(0, 100));
     return toolResult(action, result);
   } catch (err: any) {
@@ -121,36 +136,34 @@ async function actionExecutionNode(state: AgentStateType, config: any) {
 
 // ─── Tool Executor ────────────────────────────────────────────────────────────
 
-async function executeTool(name: string, args: Record<string, any>, token: string | null): Promise<string> {
-  const t = token!; // GitHub token (non-null for all github tools)
-
+async function executeTool(name: string, args: Record<string, any>, githubToken: string | null, slackToken: string | null): Promise<string> {
   switch (name) {
     // Read-only
-    case "list_github_repos": return formatRepos(await gh.listRepos(t));
-    case "get_github_repo": return gh.getRepo(t, args.owner, args.repo);
-    case "list_github_issues": return gh.listIssues(t, args.owner, args.repo, args.state);
-    case "list_pull_requests": return gh.listPullRequests(t, args.owner, args.repo, args.state);
-    case "list_branches": return gh.listBranches(t, args.owner, args.repo);
-    case "get_my_queue": return gh.getMyQueue(t);
-    case "review_pull_request": return gh.getPRForReview(t, args.owner, args.repo, args.pr_number);
+    case "list_github_repos": return formatRepos(await gh.listRepos(githubToken!));
+    case "get_github_repo": return gh.getRepo(githubToken!, args.owner, args.repo);
+    case "list_github_issues": return gh.listIssues(githubToken!, args.owner, args.repo, args.state);
+    case "list_pull_requests": return gh.listPullRequests(githubToken!, args.owner, args.repo, args.state);
+    case "list_branches": return gh.listBranches(githubToken!, args.owner, args.repo);
+    case "get_my_queue": return gh.getMyQueue(githubToken!);
+    case "review_pull_request": return gh.getPRForReview(githubToken!, args.owner, args.repo, args.pr_number);
 
     // Write
-    case "create_github_repo": return gh.createRepo(t, args.name, args.description ?? "", args.private ?? false);
-    case "create_github_issue": return gh.createIssue(t, args.owner, args.repo, args.title, args.body);
-    case "close_github_issue": return gh.closeIssue(t, args.owner, args.repo, args.issue_number);
-    case "add_comment": return gh.addComment(t, args.owner, args.repo, args.issue_number, args.body);
-    case "create_pull_request": return gh.createPullRequest(t, args.owner, args.repo, args.title, args.head, args.base, args.body);
-    case "create_branch": return gh.createBranch(t, args.owner, args.repo, args.branch, args.from_branch);
-    case "create_release": return gh.createRelease(t, args.owner, args.repo, args.tag, args.name, args.body);
+    case "create_github_repo": return gh.createRepo(githubToken!, args.name, args.description ?? "", args.private ?? false);
+    case "create_github_issue": return gh.createIssue(githubToken!, args.owner, args.repo, args.title, args.body);
+    case "close_github_issue": return gh.closeIssue(githubToken!, args.owner, args.repo, args.issue_number);
+    case "add_comment": return gh.addComment(githubToken!, args.owner, args.repo, args.issue_number, args.body);
+    case "create_pull_request": return gh.createPullRequest(githubToken!, args.owner, args.repo, args.title, args.head, args.base, args.body);
+    case "create_branch": return gh.createBranch(githubToken!, args.owner, args.repo, args.branch, args.from_branch);
+    case "create_release": return gh.createRelease(githubToken!, args.owner, args.repo, args.tag, args.name, args.body);
 
 
     // Destructive
-    case "merge_pull_request": return gh.mergePullRequest(t, args.owner, args.repo, args.pr_number);
-    case "delete_github_repo": return gh.deleteRepo(t, args.owner, args.repo);
+    case "merge_pull_request": return gh.mergePullRequest(githubToken!, args.owner, args.repo, args.pr_number);
+    case "delete_github_repo": return gh.deleteRepo(githubToken!, args.owner, args.repo);
 
     // Slack
     case "send_slack_message":
-      return `[Demo] Slack message sent to ${args.channel}: "${args.message}"`;
+      return await slack.sendSlackMessage(slackToken!, args.channel, args.message);
 
     default:
       return `Unknown tool: ${name}`;
