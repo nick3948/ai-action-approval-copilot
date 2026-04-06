@@ -1,7 +1,9 @@
 import { StateGraph, START, END, MemorySaver } from "@langchain/langgraph";
+import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
+import pg from "pg";
 import { AgentState, AgentStateType } from "./state";
 import { TOOLS, TOOLS_MAP } from "./tools";
-import { getServiceToken } from "@/lib/auth0-management";
+import { getServiceToken, getSlackProfileName } from "@/lib/auth0-management";
 import * as gh from "@/lib/github-api";
 import * as slack from "@/lib/slack-api";
 import { ChatOpenAI } from "@langchain/openai";
@@ -53,7 +55,18 @@ ${TOOLS.map((t) => `- ${t.name}: ${t.description.split(".")[0]}`).join("\n")}
 - "Close that issue" → refer to the most recently discussed issue number in context
 - "Ping the team" → send a Slack message to #general or the channel they specify
 
-You are a productivity multiplier. Be fast, accurate, and treat every developer like a senior engineer who knows what they're doing.`;
+## Senior Developer Guidance
+- **Act like a senior developer with full-stack, system, and architecture expertise.** Always provide insight into best practices, design patterns, scalability, reliability, performance, and maintainability.
+- **Be opinionated but practical.** Recommend solutions backed by experience, including trade-offs for time, cost, complexity, and risk.
+- **Explain rationale when suggesting changes.** For example, explain why a database schema, caching strategy, or API design is chosen.
+- **System and architecture guidance.** Suggest improvements for modularity, security, CI/CD pipelines, monitoring, logging, observability, cloud infra, and distributed systems.
+- **Code review mentorship.** Highlight potential bugs, anti-patterns, performance issues, and security concerns in PRs.
+- **Project and workflow optimization.** Recommend ways to speed up development, reduce technical debt, and improve team collaboration.
+- **Always align suggestions with developer productivity.** Focus on solutions that save time, reduce repetitive work, and improve code quality without unnecessary complexity.
+- **Do not compromise on security or maintainability** when giving advice.
+- **Provide actionable next steps.** When pointing out issues or suggesting improvements, offer concrete steps or example code snippets if relevant.
+
+You are a productivity multiplier. Be fast, accurate, and treat every developer like a senior engineer who knows what they're doing. Treat every user query as if you are mentoring a capable developer, not just automating actions. Combine practical execution with deep technical guidance.`;
 
 
 
@@ -66,7 +79,11 @@ async function agentNode(state: AgentStateType) {
 
   if (toolCalls.length > 0) {
     console.log("[agent] Tool chosen:", toolCalls[0].name);
-    return { messages: [response], pending_action: toolCalls[0] };
+    const safeMessage = new AIMessage({
+      content: response.content,
+      tool_calls: [toolCalls[0]],
+    });
+    return { messages: [safeMessage], pending_action: toolCalls[0] };
   }
 
   console.log("[agent] Text response.");
@@ -97,7 +114,7 @@ async function actionExecutionNode(state: AgentStateType, config: any) {
 
   // Get GitHub token if needed
   let githubToken: string | null = null;
-  if (action?.name?.includes("github") || action?.name?.includes("repo") || action?.name?.includes("pull") || action?.name?.includes("branch") || action?.name?.includes("release") || action?.name?.includes("issue")) {
+  if (action?.name?.includes("github") || action?.name?.includes("repo") || action?.name?.includes("pull") || action?.name?.includes("branch") || action?.name?.includes("release") || action?.name?.includes("issue") || action?.name?.includes("queue") || action?.name?.includes("comment")) {
     const userId: string | undefined = config?.configurable?.auth0UserId;
     if (!userId) return toolResult(action, "Error: No Auth0 user session. Please log in.");
 
@@ -114,6 +131,16 @@ async function actionExecutionNode(state: AgentStateType, config: any) {
   if (action?.name?.includes("slack")) {
     const userId: string | undefined = config?.configurable?.auth0UserId;
     if (!userId) return toolResult(action, "Error: No Auth0 user session. Please log in.");
+
+    if (action.name === "send_slack_message" && args.message) {
+      let slackRealName: string | null = null;
+      try {
+        slackRealName = await getSlackProfileName(userId);
+      } catch (e) { }
+
+      const userName = slackRealName || config?.configurable?.auth0UserName || "A Developer";
+      args.message = `*Message sent by ${userName} via Copilot:*\n${args.message}`;
+    }
 
     try {
       slackToken = await getServiceToken(userId, "slack");
@@ -194,6 +221,30 @@ function routeAfterClassification(state: AgentStateType) {
   return state.pending_action ? "action_execution" : END;
 }
 
+// ─── Checkpointer: Postgres (persistent) with MemorySaver fallback ───────────
+
+async function createCheckpointer() {
+  if (process.env.DATABASE_URL) {
+    try {
+      const pool = new pg.Pool({
+        connectionString: process.env.DATABASE_URL,
+        ssl: { rejectUnauthorized: false },
+        max: 5,
+      });
+      const pgCheckpointer = new PostgresSaver(pool);
+      // Creates the required LangGraph tables if they don't exist yet
+      await pgCheckpointer.setup();
+      console.log("[checkpointer] ✅ Using Neon Postgres persistent storage.");
+      return pgCheckpointer;
+    } catch (err) {
+      console.warn("[checkpointer] ⚠️ Postgres unavailable, falling back to MemorySaver:", err);
+    }
+  } else {
+    console.log("[checkpointer] No DATABASE_URL set — using in-memory storage.");
+  }
+  return new MemorySaver();
+}
+
 // ─── Graph Construction ───────────────────────────────────────────────────────
 
 const builder = new StateGraph(AgentState)
@@ -205,9 +256,24 @@ const builder = new StateGraph(AgentState)
   .addConditionalEdges("risk_classifier", routeAfterClassification)
   .addEdge("action_execution", "agent");
 
-export const checkpointer = new MemorySaver();
+let _agentGraph: ReturnType<typeof builder.compile> | null = null;
 
-export const agentGraph = builder.compile({
-  checkpointer,
-  interruptBefore: ["action_execution"],
-});
+export async function getAgentGraph() {
+  if (!_agentGraph) {
+    const checkpointer = await createCheckpointer();
+    _agentGraph = builder.compile({
+      checkpointer,
+      interruptBefore: ["action_execution"],
+    });
+  }
+  return _agentGraph;
+}
+
+export const agentGraph = {
+  invoke: async (...args: Parameters<ReturnType<typeof builder.compile>["invoke"]>) =>
+    (await getAgentGraph()).invoke(...args),
+  getState: async (...args: Parameters<ReturnType<typeof builder.compile>["getState"]>) =>
+    (await getAgentGraph()).getState(...args),
+  updateState: async (...args: Parameters<ReturnType<typeof builder.compile>["updateState"]>) =>
+    (await getAgentGraph()).updateState(...args),
+};

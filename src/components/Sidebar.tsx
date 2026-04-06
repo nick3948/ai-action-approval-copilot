@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { MessageSquare, Plus, PanelLeftClose, PanelLeft, Trash2 } from "lucide-react";
+import { MessageSquare, Plus, PanelLeftClose, PanelLeft, Trash2, Search } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 export function Sidebar() {
@@ -11,7 +11,10 @@ export function Sidebar() {
 
   const [isOpen, setIsOpen] = useState(true);
   const [history, setHistory] = useState<{ id: string; title: string; date: number }[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<{ id: string, title: string } | null>(null);
+
+  const filteredHistory = history.filter(chat => chat.title.toLowerCase().includes(searchQuery.toLowerCase()));
 
   const loadHistory = () => {
     const raw = localStorage.getItem("chat_history");
@@ -78,6 +81,19 @@ export function Sidebar() {
 
   return (
     <div className={`w-72 shrink-0 border-r border-slate-200/70 dark:border-slate-800/70 bg-white/30 dark:bg-[#0B0C10]/60 backdrop-blur-xl flex flex-col h-full transition-all relative z-40`}>
+      <div className="px-4 pt-4 pb-1">
+        <div className="relative">
+          <input 
+            type="text" 
+            placeholder="Search chats..." 
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg pl-8 pr-3 py-2 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 placeholder:text-slate-400 font-medium"
+          />
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+        </div>
+      </div>
+
       <div className="p-4 flex gap-2 items-center justify-between border-b border-slate-200/50 dark:border-slate-800/50">
         <button
           onClick={handleNewChat}
@@ -97,7 +113,7 @@ export function Sidebar() {
       <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-1.5 scroll-smooth">
         <span className="px-3 py-2 text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Chat History</span>
 
-        {history.map(chat => (
+        {filteredHistory.map(chat => (
           <button
             key={chat.id}
             onClick={() => router.push(`/?chatId=${chat.id}`)}
@@ -119,6 +135,12 @@ export function Sidebar() {
         {history.length === 0 && (
           <div className="text-center p-4 text-xs text-slate-400 font-medium">
             No history. Start a new chat!
+          </div>
+        )}
+        
+        {history.length > 0 && filteredHistory.length === 0 && (
+          <div className="text-center p-4 text-xs text-slate-400 font-medium">
+            No results found.
           </div>
         )}
       </div>

@@ -117,36 +117,43 @@ export function ApprovalCard({
 
       <div className="p-5 space-y-5">
         <div>
-          <h4 className="text-xl font-bold text-card-foreground mb-1 font-mono">{actionName}</h4>
+          <h4 className="text-xl font-bold text-card-foreground mb-1 font-mono">
+            {actionName.replace(/_/g, " ")}
+          </h4>
+          <p className="text-xs text-muted-foreground font-mono opacity-60 mt-0.5 mb-2">{actionName}</p>
           <p className="text-sm text-muted-foreground">
             The AI agent wants to execute this action on your behalf. Review details below before approving.
           </p>
         </div>
 
         {/* Scopes */}
-        <div className="space-y-2">
-          <div className="flex items-center gap-2 text-sm font-semibold text-card-foreground">
-            <Key size={15} className="text-primary" />
-            <p>Access Scopes Requested</p>
+        {requestedScopes && requestedScopes.length > 0 && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 text-sm font-semibold text-card-foreground">
+              <Key size={15} className="text-primary" />
+              <p>Access Scopes Requested</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {requestedScopes.map((scope) => (
+                <span key={scope} className="px-2.5 py-1 rounded-md bg-muted text-xs font-mono border border-border">
+                  {scope}
+                </span>
+              ))}
+            </div>
           </div>
-          <div className="flex flex-wrap gap-2">
-            {requestedScopes.map((scope) => (
-              <span key={scope} className="px-2.5 py-1 rounded-md bg-muted text-xs font-mono border border-border">
-                {scope}
-              </span>
-            ))}
-          </div>
-        </div>
+        )}
 
-        {/* Action Details */}
-        <div className="space-y-2">
-          <p className="text-sm font-semibold text-card-foreground">Action Preview</p>
-          <div className="rounded-lg bg-zinc-950 p-4 overflow-x-auto border border-zinc-800 shadow-inner">
-            <pre className="text-xs text-green-400 font-mono leading-relaxed">
-              {JSON.stringify(actionDetails, null, 2)}
-            </pre>
+        {/* Action Details — only shown when there are actual parameters */}
+        {actionDetails && Object.keys(actionDetails).length > 0 && (
+          <div className="space-y-2">
+            <p className="text-sm font-semibold text-card-foreground">Action Parameters</p>
+            <div className="rounded-lg bg-zinc-950 p-4 overflow-x-auto border border-zinc-800 shadow-inner">
+              <pre className="text-xs text-green-400 font-mono leading-relaxed">
+                {JSON.stringify(actionDetails, null, 2)}
+              </pre>
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Type-to-Confirm (medium / high / critical) */}
         {requiresConfirmation && confirmationTarget && (

@@ -1,6 +1,8 @@
 import { auth0 } from "@/lib/auth0";
 import { getConnectedServices } from "@/lib/auth0-management";
 import { redirect } from "next/navigation";
+import { disconnectIntegrationAction } from "./actions";
+import { ArrowLeft, LogOut } from "lucide-react";
 
 const INTEGRATIONS = [
   {
@@ -77,20 +79,23 @@ export default async function IntegrationsPage() {
       <header className="flex items-center justify-between p-4 px-6 border-b border-slate-200/50 dark:border-slate-800/50 bg-white/80 dark:bg-[#0B0C10]/80 backdrop-blur-md sticky top-0 z-50">
         <div className="flex items-center gap-3">
           <a href="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-sm">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-sm">
               <span className="text-white font-bold font-mono text-sm leading-none">AC</span>
             </div>
             <h1 className="text-lg font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600 dark:from-indigo-400 dark:to-purple-400">
-              Action Approval Copilot
+              Integrations Hub
             </h1>
           </a>
         </div>
+        
+        {/* Prominent Back to Chat Button */}
         <div className="flex items-center gap-3">
-          <a href="/" className="text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors">
-            ← Back to Chat
+          <a href="/" className="group flex items-center justify-center gap-2 px-5 py-2.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold shadow-lg shadow-indigo-500/30 hover:shadow-indigo-500/50 transition-all hover:-translate-y-0.5">
+            <ArrowLeft size={16} className="group-hover:-translate-x-1 transition-transform" /> 
+            <span>Return to AI Chat</span>
           </a>
-          <a href="/auth/logout" className="text-sm font-medium bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 px-4 py-1.5 rounded-full transition-colors text-slate-700 dark:text-slate-300">
-            Logout
+          <a href="/auth/logout" className="flex items-center gap-1.5 text-sm font-medium bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 px-4 py-2.5 rounded-2xl transition-colors text-slate-700 dark:text-slate-300 shadow-sm">
+            <LogOut size={14} /> Logout
           </a>
         </div>
       </header>
@@ -166,10 +171,15 @@ export default async function IntegrationsPage() {
 
                 {/* Connect / Disconnect Button */}
                 {isConnected ? (
-                  <div className="flex items-center gap-2 mt-auto pt-2">
-                    <div className="flex-1 text-center text-sm font-medium bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 py-2 rounded-xl border border-emerald-200 dark:border-emerald-800">
+                  <div className="flex flex-col gap-2 mt-auto pt-2">
+                    <div className="flex-1 flex items-center justify-center gap-1.5 text-sm font-medium bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 py-2 rounded-xl border border-emerald-200 dark:border-emerald-800">
                       ✓ Active
                     </div>
+                    <form action={disconnectIntegrationAction.bind(null, integration.id)} className="w-full">
+                      <button type="submit" className="w-full text-xs text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 py-1.5 rounded-lg transition-colors font-medium">
+                        Disconnect {integration.name}
+                      </button>
+                    </form>
                   </div>
                 ) : integration.comingSoon ? (
                   <button
