@@ -23,7 +23,7 @@ export async function GET(req: NextRequest) {
 
   const linkUrl = new URL("/auth/login", req.url);
   linkUrl.searchParams.set("connection", "sign-in-with-slack");
-  linkUrl.searchParams.set("returnTo", "/auth/callback-link"); // send them to linking callback
+  linkUrl.searchParams.set("returnTo", "/auth/callback-link");
   linkUrl.searchParams.set("prompt", "login");
 
   return NextResponse.redirect(linkUrl);
