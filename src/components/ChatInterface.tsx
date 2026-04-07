@@ -120,24 +120,15 @@ export function ChatInterface({ user }: { user: any }) {
   useEffect(() => {
     // If no specific chat URL, first try to resume the most recent chat from history
     if (!chatId) {
-      const raw = localStorage.getItem("chat_history");
-      if (raw) {
-        const history = JSON.parse(raw);
-
-        const latestId = history[0]?.id;
-
-        if (latestId) {
-          router.replace(`/?chatId=${latestId}`);
-          return;
-        }
-      }
-
-      // If no valid history found, kick down into a randomized new instance
       const newId = Math.random().toString(36).substring(2, 10);
-      const currentRaw = localStorage.getItem("chat_history");
-      const history = currentRaw ? JSON.parse(currentRaw) : [];
-      localStorage.setItem("chat_history", JSON.stringify([{ id: newId, title: "New Conversation", date: Date.now() }, ...history]));
-      window.dispatchEvent(new Event("chatHistoryUpdated"));
+
+      fetch("/api/history", {
+        method: "POST",
+        body: JSON.stringify({ id: newId, title: "New Conversation" })
+      }).then(() => {
+        window.dispatchEvent(new Event("chatHistoryUpdated"));
+      });
+
       router.replace(`/?chatId=${newId}`);
       return;
     }
@@ -164,14 +155,15 @@ export function ChatInterface({ user }: { user: any }) {
     loadState();
   }, [chatId, router]);
 
-  const updateChatTitle = (inputStr: string) => {
-    const raw = localStorage.getItem("chat_history");
-    if (!raw || !chatId) return;
-    const history = JSON.parse(raw);
-    const curr = history.find((h: any) => h.id === chatId);
-    if (curr && curr.title === "New Conversation") {
-      curr.title = inputStr.substring(0, 30) + (inputStr.length > 30 ? '...' : '');
-      localStorage.setItem("chat_history", JSON.stringify(history));
+  const updateChatTitle = async (inputStr: string) => {
+    if (!chatId) return;
+
+    if (localHistory.length === 0 && (!agentState || agentState.messages.length === 0)) {
+      const title = inputStr.substring(0, 30) + (inputStr.length > 30 ? '...' : '');
+      await fetch("/api/history", {
+        method: "POST",
+        body: JSON.stringify({ id: chatId, title })
+      });
       window.dispatchEvent(new Event("chatHistoryUpdated"));
     }
   };
