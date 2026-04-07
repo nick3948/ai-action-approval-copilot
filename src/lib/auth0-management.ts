@@ -168,8 +168,7 @@ export async function getGitHubToken(auth0UserId: string): Promise<string> {
 export async function getConnectedServices(auth0UserId: string): Promise<Record<string, boolean>> {
   const identities: any[] = await getAllIdentitiesByEmail(auth0UserId);
 
-  console.log(`[getConnectedServices] Checking user: ${auth0UserId}`);
-  console.log(`[getConnectedServices] Unified identities found across email:`, JSON.stringify(identities, null, 2));
+  console.log(`[getConnectedServices] Unified identities mapped for user ${auth0UserId}`);
 
   return {
     github: identities.some((id) => (id.provider === "github" || id.connection === "github") && id.access_token),

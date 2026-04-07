@@ -30,16 +30,16 @@ export function ChatInterface({ user }: { user: any }) {
         recognitionRef.current.lang = 'en-US';
 
         recognitionRef.current.onstart = () => {
-          console.log("[Voice] Microphone is active and listening...");
+
         };
 
         recognitionRef.current.onresult = (event: any) => {
-          console.log("[Voice] Received speech result!", event);
+
 
           const latestResult = event.results[event.results.length - 1];
           if (latestResult.isFinal) {
             const transcriptChunk = latestResult[0].transcript.trim();
-            console.log("[Voice] Extracted clean text:", transcriptChunk);
+
             setInput((prev) => (prev.trim() ? prev + ' ' + transcriptChunk : transcriptChunk));
           }
         };
@@ -53,7 +53,6 @@ export function ChatInterface({ user }: { user: any }) {
         };
 
         recognitionRef.current.onend = () => {
-          console.log("[Voice] Microphone disconnected/ended.");
           setIsListening(false);
         };
       }
