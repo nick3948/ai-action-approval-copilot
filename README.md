@@ -25,14 +25,14 @@ This application is built with modern, cutting-edge web and AI technologies:
 6. **Execution**: Once the user explicitly clicks "Approve", the server resumes the `LangGraph` execution, pulls the user's secret GitHub token securely from Auth0, performs the action, and logs it in the database.
 
 ## 4. Why this Architecture?
-* **LangGraph + Postgres**: Because the agent relies on LangGraph, making complex API chains (e.g., getting the diff of a PR, feeding it to an LLM for review, then adding a comment) is easy. Using a Postgres Checkpointer means that complex agent logic and chat history are suspended securely in the cloud. You can start a conversation on your phone, and resume it perfectly on your laptop. 
+* **LangGraph + Postgres**: Because the agent relies on LangGraph, making complex API chains (e.g., getting the diff of a PR, feeding it to an LLM for review, then adding a comment) is easy. Using a Postgres Checkpointer means that complex agent logic and chat history are suspended securely in the cloud. You can start a conversation on your laptop, and resume it whenever you log in. 
 * **Auth0 Token Vault**: Managing rolling external OAuth access tokens (like Slack or GitHub) is notoriously dangerous to build from scratch. Using Auth0's native identity linking mechanism, we keep API keys completely out of local storage and safely manage refreshes.
 * **Four-Tier Risk Model**: Rather than treating every action the same, actions are assigned risk levels. Viewing a repo is low risk, while deleting a repository triggers a **Critical** flag, seamlessly forcing Auth0 Step-up Authentication (Re-login) before execution.
 
 ## 5. Features You Can Use Right Now
 * **Developer Mentorship & Chat**: The Copilot isn't just an API runner, you can chat natively with the AI for architectural advice, debugging, and general software engineering inquiries.
 * **GitHub Operations**: List repos, list issues, pull request summaries, create repos, open PRs, cut releases, create branches, review PRs, and delete repositories.
-* **Slack Integration**: Send direct messages or channel broadcasts on behalf of the developer.
+* **Slack Integration**: Send channel broadcasts on behalf of the developer.
 * **Persistent Sessions**: Infinite memory across active chat threads.
 * **Security Guardrails**: Visually distinct approval interfaces, ensuring what you prompt is what you get.
 
