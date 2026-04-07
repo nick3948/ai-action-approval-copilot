@@ -75,10 +75,6 @@ async function getUserProfile(auth0UserId: string) {
   return user;
 }
 
-/**
- * Fetches ALL user profiles that share the same email address as the current user.
- * This effectively acts as "implicit account linking" for our application without needing Auth0 Actions.
- */
 async function getAllIdentitiesByEmail(auth0UserId: string) {
   const user = await getUserProfile(auth0UserId);
   if (!user.email) return user.identities ?? [];
@@ -93,8 +89,23 @@ async function getAllIdentitiesByEmail(auth0UserId: string) {
   const usersWithSameEmail = await res.json();
 
   const allIdentities: any[] = [];
+
   for (const u of usersWithSameEmail) {
-    if (u.identities) allIdentities.push(...u.identities);
+    if (u.user_id === auth0UserId) {
+      if (user.identities) allIdentities.push(...user.identities);
+    } else {
+      try {
+        const freshUserRes = await fetch(
+          `https://${process.env.AUTH0_DOMAIN}/api/v2/users/${encodeURIComponent(u.user_id)}`,
+          { headers: { Authorization: `Bearer ${mgmtToken}` } }
+        );
+        if (freshUserRes.ok) {
+          const freshUser = await freshUserRes.json();
+          if (freshUser.identities) allIdentities.push(...freshUser.identities);
+        }
+      } catch (e) {
+      }
+    }
   }
   return allIdentities;
 }
@@ -130,30 +141,101 @@ export async function linkAccountsInAuth0(primaryUserId: string, secondaryUserId
 
 export async function disconnectService(auth0UserId: string, targetProvider: string) {
   const mgmtToken = await getManagementAPIToken();
-  const user = await getUserProfile(auth0UserId);
-  const identities = user.identities ?? [];
+  const primaryUser = await getUserProfile(auth0UserId);
 
-  const identityToDrop = identities.find((id: any) => id.provider === targetProvider || id.connection?.includes(targetProvider) || id.provider?.includes(targetProvider));
+  if (!primaryUser.email) {
+    const identityToDrop = (primaryUser.identities ?? []).find(
+      (id: any) => id.provider === targetProvider || id.connection?.includes(targetProvider) || id.provider?.includes(targetProvider)
+    );
 
-  if (!identityToDrop) {
+    if (!identityToDrop) throw new Error(`Cannot find connected identity for ${targetProvider}`);
+
+    if (primaryUser.identities.length === 1) {
+      throw new Error("Cannot disconnect your only authentication provider.");
+    }
+
+    const pId = encodeURIComponent(auth0UserId);
+    const secondaryProvider = encodeURIComponent(identityToDrop.provider);
+    const secondaryUserId = encodeURIComponent(identityToDrop.user_id);
+
+    const res = await fetch(`https://${process.env.AUTH0_DOMAIN}/api/v2/users/${pId}/identities/${secondaryProvider}/${secondaryUserId}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${mgmtToken}` }
+    });
+
+    if (!res.ok) throw new Error(`Auth0 Disconnect Failed: ${await res.text()}`);
+    return;
+  }
+
+  const emailRes = await fetch(
+    `https://${process.env.AUTH0_DOMAIN}/api/v2/users-by-email?email=${encodeURIComponent(primaryUser.email)}`,
+    { headers: { Authorization: `Bearer ${mgmtToken}` } }
+  );
+
+  if (!emailRes.ok) throw new Error(`Failed to fetch users by email: ${await emailRes.text()}`);
+
+  const usersWithSameEmail = await emailRes.json();
+
+  let targetAuth0User = null;
+  let identityToDrop = null;
+
+  for (const u of usersWithSameEmail) {
+    const match = (u.identities ?? []).find(
+      (id: any) => id.provider === targetProvider || id.connection?.includes(targetProvider) || id.provider?.includes(targetProvider)
+    );
+    if (match) {
+      targetAuth0User = u;
+      identityToDrop = match;
+      break;
+    }
+  }
+
+  if (!targetAuth0User || !identityToDrop) {
     throw new Error(`Cannot find connected identity for ${targetProvider}`);
   }
 
-  const primaryId = encodeURIComponent(auth0UserId);
-  const secondaryProvider = encodeURIComponent(identityToDrop.provider);
-  const secondaryUserId = encodeURIComponent(identityToDrop.user_id);
+  const isOnlyIdentity = targetAuth0User.identities.length === 1;
 
-  console.log(`[disconnectService] Dropping ${secondaryProvider}|${secondaryUserId} from ${primaryId}`);
+  if (isOnlyIdentity) {
+    if (targetAuth0User.user_id === auth0UserId) {
+      throw new Error("Cannot disconnect the primary login provider you are currently signed in with.");
+    }
 
-  const res = await fetch(`https://${process.env.AUTH0_DOMAIN}/api/v2/users/${primaryId}/identities/${secondaryProvider}/${secondaryUserId}`, {
-    method: "DELETE",
-    headers: { Authorization: `Bearer ${mgmtToken}` }
-  });
+    console.log(`[disconnectService] Deleting user ${targetAuth0User.user_id} for implicitly linked provider ${targetProvider}`);
+    const deleteRes = await fetch(`https://${process.env.AUTH0_DOMAIN}/api/v2/users/${encodeURIComponent(targetAuth0User.user_id)}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${mgmtToken}` }
+    });
 
-  if (!res.ok) {
-    const errorText = await res.text();
-    console.error(`[disconnectService] Failed: ${errorText}`);
-    throw new Error(`Auth0 Disconnect Failed: ${errorText}`);
+    if (!deleteRes.ok) throw new Error(`Auth0 User Deletion Failed: ${await deleteRes.text()}`);
+  } else {
+    console.log(`[disconnectService] Unlinking identity ${identityToDrop.provider}|${identityToDrop.user_id} from user ${targetAuth0User.user_id}`);
+
+    const uId = encodeURIComponent(targetAuth0User.user_id);
+    const sProvider = encodeURIComponent(identityToDrop.provider);
+    const sUserId = encodeURIComponent(identityToDrop.user_id);
+
+    const unlinkRes = await fetch(`https://${process.env.AUTH0_DOMAIN}/api/v2/users/${uId}/identities/${sProvider}/${sUserId}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${mgmtToken}` }
+    });
+
+    if (!unlinkRes.ok) throw new Error(`Auth0 Disconnect Failed: ${await unlinkRes.text()}`);
+
+    // Auth0 restores the secondary identity as a standalone user immediately after unlinking.
+    // Our app uses implicit linking by email, so we MUST delete this newly-restored user,
+    // otherwise the UI will still detect it as "connected".
+    const restoredUserId = `${identityToDrop.provider}|${identityToDrop.user_id}`;
+
+    console.log(`[disconnectService] Deleting the restored standalone user: ${restoredUserId}`);
+    const deleteRestoredRes = await fetch(`https://${process.env.AUTH0_DOMAIN}/api/v2/users/${encodeURIComponent(restoredUserId)}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${mgmtToken}` }
+    });
+
+    if (!deleteRestoredRes.ok) {
+      console.warn(`[disconnectService] Warning: Could not delete restored standalone user: ${await deleteRestoredRes.text()}`);
+    }
   }
 }
 
@@ -216,11 +298,11 @@ export async function getSlackProfileName(auth0UserId: string): Promise<string |
   try {
     const identities = await getAllIdentitiesByEmail(auth0UserId);
     const slackIdentity = identities.find((id: any) => id.provider === "slack" || id.connection?.includes("slack") || id.provider?.includes("slack"));
-    
+
     if (slackIdentity?.profileData?.name) {
       return slackIdentity.profileData.name;
     }
-  } catch(e) {
+  } catch (e) {
     console.error("[getSlackProfileName] Error fetching identity", e);
   }
   return null;
