@@ -1,13 +1,5 @@
 /**
  * Auth0 Management API helper
- *
- * Token lifecycle:
- *  - Auth0 M2M tokens expire in 86400s (24h) by default
- *  - We cache with a 5-minute proactive refresh window (token refreshed
- *    5 min before actual expiry, not just 60s) — safer for long sessions
- *  - Singleton promise guards against concurrent refreshes (thundering herd):
- *    if N requests arrive simultaneously with an expired token, only ONE
- *    HTTP call is made to Auth0; the rest await the same promise
  */
 
 let mgmtTokenCache: { token: string; expiresAt: number } | null = null;
@@ -75,39 +67,9 @@ async function getUserProfile(auth0UserId: string) {
   return user;
 }
 
-async function getAllIdentitiesByEmail(auth0UserId: string) {
+export async function getAllIdentitiesByEmail(auth0UserId: string) {
   const user = await getUserProfile(auth0UserId);
-  if (!user.email) return user.identities ?? [];
-
-  const mgmtToken = await getManagementAPIToken();
-  const res = await fetch(
-    `https://${process.env.AUTH0_DOMAIN}/api/v2/users-by-email?email=${encodeURIComponent(user.email)}`,
-    { headers: { Authorization: `Bearer ${mgmtToken}` } }
-  );
-
-  if (!res.ok) return user.identities ?? [];
-  const usersWithSameEmail = await res.json();
-
-  const allIdentities: any[] = [];
-
-  for (const u of usersWithSameEmail) {
-    if (u.user_id === auth0UserId) {
-      if (user.identities) allIdentities.push(...user.identities);
-    } else {
-      try {
-        const freshUserRes = await fetch(
-          `https://${process.env.AUTH0_DOMAIN}/api/v2/users/${encodeURIComponent(u.user_id)}`,
-          { headers: { Authorization: `Bearer ${mgmtToken}` } }
-        );
-        if (freshUserRes.ok) {
-          const freshUser = await freshUserRes.json();
-          if (freshUser.identities) allIdentities.push(...freshUser.identities);
-        }
-      } catch (e) {
-      }
-    }
-  }
-  return allIdentities;
+  return user.identities ?? [];
 }
 
 export async function linkAccountsInAuth0(primaryUserId: string, secondaryUserId: string) {
@@ -143,99 +105,41 @@ export async function disconnectService(auth0UserId: string, targetProvider: str
   const mgmtToken = await getManagementAPIToken();
   const primaryUser = await getUserProfile(auth0UserId);
 
-  if (!primaryUser.email) {
-    const identityToDrop = (primaryUser.identities ?? []).find(
-      (id: any) => id.provider === targetProvider || id.connection?.includes(targetProvider) || id.provider?.includes(targetProvider)
-    );
-
-    if (!identityToDrop) throw new Error(`Cannot find connected identity for ${targetProvider}`);
-
-    if (primaryUser.identities.length === 1) {
-      throw new Error("Cannot disconnect your only authentication provider.");
-    }
-
-    const pId = encodeURIComponent(auth0UserId);
-    const secondaryProvider = encodeURIComponent(identityToDrop.provider);
-    const secondaryUserId = encodeURIComponent(identityToDrop.user_id);
-
-    const res = await fetch(`https://${process.env.AUTH0_DOMAIN}/api/v2/users/${pId}/identities/${secondaryProvider}/${secondaryUserId}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${mgmtToken}` }
-    });
-
-    if (!res.ok) throw new Error(`Auth0 Disconnect Failed: ${await res.text()}`);
-    return;
-  }
-
-  const emailRes = await fetch(
-    `https://${process.env.AUTH0_DOMAIN}/api/v2/users-by-email?email=${encodeURIComponent(primaryUser.email)}`,
-    { headers: { Authorization: `Bearer ${mgmtToken}` } }
+  const identityToDrop = (primaryUser.identities ?? []).find(
+    (id: any) => id.provider === targetProvider || id.connection?.includes(targetProvider) || id.provider?.includes(targetProvider)
   );
 
-  if (!emailRes.ok) throw new Error(`Failed to fetch users by email: ${await emailRes.text()}`);
-
-  const usersWithSameEmail = await emailRes.json();
-
-  let targetAuth0User = null;
-  let identityToDrop = null;
-
-  for (const u of usersWithSameEmail) {
-    const match = (u.identities ?? []).find(
-      (id: any) => id.provider === targetProvider || id.connection?.includes(targetProvider) || id.provider?.includes(targetProvider)
-    );
-    if (match) {
-      targetAuth0User = u;
-      identityToDrop = match;
-      break;
-    }
-  }
-
-  if (!targetAuth0User || !identityToDrop) {
+  if (!identityToDrop) {
     throw new Error(`Cannot find connected identity for ${targetProvider}`);
   }
 
-  const isOnlyIdentity = targetAuth0User.identities.length === 1;
+  if (primaryUser.identities.length === 1) {
+    throw new Error("Cannot disconnect your only authentication provider.");
+  }
 
-  if (isOnlyIdentity) {
-    if (targetAuth0User.user_id === auth0UserId) {
-      throw new Error("Cannot disconnect the primary login provider you are currently signed in with.");
-    }
+  console.log(`[disconnectService] Unlinking identity ${identityToDrop.provider}|${identityToDrop.user_id} from user ${auth0UserId}`);
 
-    console.log(`[disconnectService] Deleting user ${targetAuth0User.user_id} for implicitly linked provider ${targetProvider}`);
-    const deleteRes = await fetch(`https://${process.env.AUTH0_DOMAIN}/api/v2/users/${encodeURIComponent(targetAuth0User.user_id)}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${mgmtToken}` }
-    });
+  const pId = encodeURIComponent(auth0UserId);
+  const secondaryProvider = encodeURIComponent(identityToDrop.provider);
+  const secondaryUserId = encodeURIComponent(identityToDrop.user_id);
 
-    if (!deleteRes.ok) throw new Error(`Auth0 User Deletion Failed: ${await deleteRes.text()}`);
-  } else {
-    console.log(`[disconnectService] Unlinking identity ${identityToDrop.provider}|${identityToDrop.user_id} from user ${targetAuth0User.user_id}`);
+  const unlinkRes = await fetch(`https://${process.env.AUTH0_DOMAIN}/api/v2/users/${pId}/identities/${secondaryProvider}/${secondaryUserId}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${mgmtToken}` }
+  });
 
-    const uId = encodeURIComponent(targetAuth0User.user_id);
-    const sProvider = encodeURIComponent(identityToDrop.provider);
-    const sUserId = encodeURIComponent(identityToDrop.user_id);
+  if (!unlinkRes.ok) throw new Error(`Auth0 Disconnect Failed: ${await unlinkRes.text()}`);
 
-    const unlinkRes = await fetch(`https://${process.env.AUTH0_DOMAIN}/api/v2/users/${uId}/identities/${sProvider}/${sUserId}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${mgmtToken}` }
-    });
+  const restoredUserId = `${identityToDrop.provider}|${identityToDrop.user_id}`;
 
-    if (!unlinkRes.ok) throw new Error(`Auth0 Disconnect Failed: ${await unlinkRes.text()}`);
+  console.log(`[disconnectService] Deleting the restored standalone user: ${restoredUserId}`);
+  const deleteRestoredRes = await fetch(`https://${process.env.AUTH0_DOMAIN}/api/v2/users/${encodeURIComponent(restoredUserId)}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${mgmtToken}` }
+  });
 
-    // Auth0 restores the secondary identity as a standalone user immediately after unlinking.
-    // Our app uses implicit linking by email, so we MUST delete this newly-restored user,
-    // otherwise the UI will still detect it as "connected".
-    const restoredUserId = `${identityToDrop.provider}|${identityToDrop.user_id}`;
-
-    console.log(`[disconnectService] Deleting the restored standalone user: ${restoredUserId}`);
-    const deleteRestoredRes = await fetch(`https://${process.env.AUTH0_DOMAIN}/api/v2/users/${encodeURIComponent(restoredUserId)}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${mgmtToken}` }
-    });
-
-    if (!deleteRestoredRes.ok) {
-      console.warn(`[disconnectService] Warning: Could not delete restored standalone user: ${await deleteRestoredRes.text()}`);
-    }
+  if (!deleteRestoredRes.ok) {
+    console.warn(`[disconnectService] Warning: Could not delete restored standalone user: ${await deleteRestoredRes.text()}`);
   }
 }
 
@@ -268,10 +172,8 @@ export async function getConnectedServices(auth0UserId: string): Promise<Record<
   console.log(`[getConnectedServices] Unified identities found across email:`, JSON.stringify(identities, null, 2));
 
   return {
-    github: identities.some((id) => id.provider === "github" || id.connection === "github"),
-    slack: identities.some((id) => id.provider === "slack" || id.connection?.includes("slack") || id.provider?.includes("slack")),
-    // jira: identities.some((id) => id.provider === "jira" || id.connection?.includes("jira")),  
-    // notion: identities.some((id) => id.provider === "notion" || id.connection?.includes("notion")), 
+    github: identities.some((id) => (id.provider === "github" || id.connection === "github") && id.access_token),
+    slack: identities.some((id) => (id.provider === "slack" || id.connection?.includes("slack") || id.provider?.includes("slack")) && id.access_token),
   };
 }
 
