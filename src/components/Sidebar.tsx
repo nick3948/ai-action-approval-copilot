@@ -16,9 +16,16 @@ export function Sidebar() {
 
   const filteredHistory = history.filter(chat => chat.title.toLowerCase().includes(searchQuery.toLowerCase()));
 
-  const loadHistory = () => {
-    const raw = localStorage.getItem("chat_history");
-    if (raw) setHistory(JSON.parse(raw));
+  const loadHistory = async () => {
+    try {
+      const res = await fetch("/api/history");
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setHistory(data);
+      }
+    } catch (e) {
+      console.error("Failed to load history from DB", e);
+    }
   };
 
   useEffect(() => {
@@ -28,13 +35,26 @@ export function Sidebar() {
     return () => window.removeEventListener("chatHistoryUpdated", handleStorage);
   }, []);
 
-  const handleNewChat = () => {
+  const handleNewChat = async () => {
+    if (history.length > 0 && history[0].title === "New Conversation" && currentChatId === history[0].id) {
+      return;
+    }
+
     const newId = Math.random().toString(36).substring(2, 10);
-    const newHistory = [{ id: newId, title: "New Conversation", date: Date.now() }, ...history];
-    localStorage.setItem("chat_history", JSON.stringify(newHistory));
-    setHistory(newHistory);
+    const fakeNewChat = { id: newId, title: "New Conversation", date: Date.now() };
+    setHistory(prev => [fakeNewChat, ...prev]);
+
+    try {
+      await fetch("/api/history", {
+        method: "POST",
+        body: JSON.stringify({ id: newId, title: "New Conversation" })
+      });
+      window.dispatchEvent(new Event("chatHistoryUpdated"));
+    } catch (e) {
+      console.error("Failed to save new chat to DB", e);
+    }
+
     router.push(`/?chatId=${newId}`);
-    window.dispatchEvent(new Event("chatHistoryUpdated"));
   };
 
   const requestDelete = (e: any, id: string, title: string) => {
@@ -42,25 +62,24 @@ export function Sidebar() {
     setDeleteTarget({ id, title });
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (!deleteTarget) return;
+
     const newHistory = history.filter(h => h.id !== deleteTarget.id);
+    setHistory(newHistory);
+
+    try {
+      await fetch(`/api/history?id=${deleteTarget.id}`, { method: "DELETE" });
+    } catch (e) {
+      console.error("Failed to delete chat from DB", e);
+    }
 
     if (currentChatId === deleteTarget.id) {
       if (newHistory.length > 0) {
-        localStorage.setItem("chat_history", JSON.stringify(newHistory));
-        setHistory(newHistory);
         router.push(`/?chatId=${newHistory[0].id}`);
       } else {
-        const newId = Math.random().toString(36).substring(2, 10);
-        const freshHistory = [{ id: newId, title: "New Conversation", date: Date.now() }];
-        localStorage.setItem("chat_history", JSON.stringify(freshHistory));
-        setHistory(freshHistory);
-        router.push(`/?chatId=${newId}`);
+        router.push(`/`);
       }
-    } else {
-      localStorage.setItem("chat_history", JSON.stringify(newHistory));
-      setHistory(newHistory);
     }
 
     window.dispatchEvent(new Event("chatHistoryUpdated"));
@@ -83,9 +102,9 @@ export function Sidebar() {
     <div className={`w-72 shrink-0 border-r border-slate-200/70 dark:border-slate-800/70 bg-white/30 dark:bg-[#0B0C10]/60 backdrop-blur-xl flex flex-col h-full transition-all relative z-40`}>
       <div className="px-4 pt-4 pb-1">
         <div className="relative">
-          <input 
-            type="text" 
-            placeholder="Search chats..." 
+          <input
+            type="text"
+            placeholder="Search chats..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg pl-8 pr-3 py-2 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 placeholder:text-slate-400 font-medium"
@@ -137,7 +156,7 @@ export function Sidebar() {
             No history. Start a new chat!
           </div>
         )}
-        
+
         {history.length > 0 && filteredHistory.length === 0 && (
           <div className="text-center p-4 text-xs text-slate-400 font-medium">
             No results found.
