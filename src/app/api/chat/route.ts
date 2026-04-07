@@ -68,7 +68,7 @@ export async function POST(req: Request) {
       const latestText = messages[messages.length - 1].content;
       const humanMessage = new HumanMessage(latestText);
 
-      console.log(`[API] Invoking agent for user ${session.user.sub} with: "${latestText}"`);
+      console.log(`[API] Invoking agent for user ${session.user.sub}`);
 
       const finalState = await agentGraph.invoke({ messages: [humanMessage] }, config);
 
