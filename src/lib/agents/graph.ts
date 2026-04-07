@@ -223,17 +223,17 @@ function routeAfterClassification(state: AgentStateType) {
 
 // ─── Checkpointer: Postgres (persistent) with MemorySaver fallback ───────────
 
+import { getDbPool, setupHistoryTable } from "@/lib/db";
+
 async function createCheckpointer() {
   if (process.env.DATABASE_URL) {
     try {
-      const pool = new pg.Pool({
-        connectionString: process.env.DATABASE_URL,
-        ssl: { rejectUnauthorized: false },
-        max: 5,
-      });
+      const pool = getDbPool();
       const pgCheckpointer = new PostgresSaver(pool);
       // Creates the required LangGraph tables if they don't exist yet
       await pgCheckpointer.setup();
+      // Creates the custom Sidebar chat history table
+      await setupHistoryTable();
       console.log("[checkpointer] ✅ Using Neon Postgres persistent storage.");
       return pgCheckpointer;
     } catch (err) {
