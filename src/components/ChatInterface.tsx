@@ -250,7 +250,7 @@ export function ChatInterface({ user }: { user: any }) {
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden bg-slate-50 dark:bg-[#0B0C10]">
-      <TourGuide />
+      <TourGuide hasStartedChat={displayMessages.length > 0} />
       <main className="flex-1 overflow-y-auto flex flex-col scroll-smooth relative">
         {displayMessages.length > 0 && (
           <div className="sticky top-0 left-0 w-full h-28 bg-gradient-to-b from-slate-50/90 via-slate-50/50 to-transparent dark:from-[#0B0C10]/90 dark:via-[#0B0C10]/50 dark:to-transparent z-20 pointer-events-none shrink-0 backdrop-blur-[.5px] [mask-image:linear-gradient(to_bottom,black_40%,transparent_100%)]" />

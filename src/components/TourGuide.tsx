@@ -49,7 +49,7 @@ const CustomTooltip = ({
   );
 };
 
-export function TourGuide() {
+export function TourGuide({ hasStartedChat = false }: { hasStartedChat?: boolean }) {
   const [run, setRun] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);
   const [steps, setSteps] = useState<any[]>([
@@ -79,10 +79,17 @@ export function TourGuide() {
   useEffect(() => {
     // Check if the user has completed the tour previously
     const hasSeenTour = localStorage.getItem("has_seen_copilot_tour");
-    if (!hasSeenTour) {
+    if (!hasSeenTour && !hasStartedChat) {
       setTimeout(() => setRun(true), 500);
     }
-  }, []);
+  }, [hasStartedChat]);
+
+  useEffect(() => {
+    if (hasStartedChat && run) {
+      setRun(false);
+      localStorage.setItem("has_seen_copilot_tour", "true");
+    }
+  }, [hasStartedChat, run]);
 
 
   const handleJoyrideCallback = (data: any) => {
